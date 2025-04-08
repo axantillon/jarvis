@@ -1,35 +1,62 @@
 #!/bin/bash
 # start.sh
-# Script to run both the main backend and the web gateway concurrently
-# Changes: Run gateway in foreground, remove wait/cleanup logic.
+# Entrypoint script for the Docker container
+# Added verification for memory.json readability and exported path
 
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# --- Verify memory.json accessibility right before app start ---
+echo "--- [start.sh] Verifying /app/memory.json ---"
+if [ -f "/app/memory.json" ]; then
+    echo "--- [start.sh] /app/memory.json exists. ---"
+    echo "--- [start.sh] Permissions: $(ls -l /app/memory.json) ---"
+    echo "--- [start.sh] Attempting to read first few lines: ---"
+    head -n 5 /app/memory.json
+    echo "--- [start.sh] Attempting to read full file via cat (check for errors): ---"
+    cat /app/memory.json > /dev/null # Check readability, discard output
+    echo "--- [start.sh] /app/memory.json seems readable. ---"
+else
+    echo "--- [start.sh] CRITICAL: /app/memory.json NOT FOUND! ---"
+fi
+echo "--- [start.sh] Explicitly exporting MEMORY_FILE_PATH ---"
+export MEMORY_FILE_PATH="/app/memory.json"
+echo "--- [start.sh] MEMORY_FILE_PATH is set to: $MEMORY_FILE_PATH ---"
+
+# Define the log file path
+LOG_FILE="/app/data/main_backend.log"
+
+# Ensure the data directory exists (where logs might go)
+echo "Ensuring /app/data directory exists..."
+mkdir -p /app/data
+
+# Start the main backend server (src/main.py) in the background
+# Redirect stdout and stderr to the log file
 echo "Starting main backend server (src/main.py) in background..."
-# Assuming src/main.py runs without arguments and listens on 8765
-# Use python -u for unbuffered output to see logs immediately
-python -u src/main.py &
-MAIN_PID=$!
-echo "Main backend server PID: $MAIN_PID"
+# Ensure PYTHONPATH includes the src directory if needed, although WORKDIR /app usually suffices
+# export PYTHONPATH=/app:$PYTHONPATH
+python src/main.py > "${LOG_FILE}" 2>&1 &
+BACKEND_PID=$!
+echo "Main backend server PID: ${BACKEND_PID}"
 
-echo "Starting web gateway server (web_gateway.py) in foreground..."
-# The gateway needs to be accessible from outside the container.
-# Render typically expects the service to listen on port $PORT, often 10000.
-# We'll run uvicorn bound to 0.0.0.0 and port $PORT (or default 8000 if $PORT isn't set).
-# Ensure web_gateway.py's BACKEND_WS_URI points to ws://localhost:8765 (correct inside container)
-PORT=${PORT:-8000} # Use Render's PORT env var, default to 8000
-# Use --no-access-log for cleaner logs unless debugging needed
-# Run uvicorn in the FOREGROUND (removed trailing &)
-uvicorn web_gateway:app --host 0.0.0.0 --port $PORT --no-access-log
+# Wait a few seconds to allow the backend server to initialize
+# Adjust sleep duration if needed
+sleep 5
 
-# Exit with the status of the gateway process
-GATEWAY_EXIT_STATUS=$?
-echo "Web gateway server exited with status $GATEWAY_EXIT_STATUS"
-
-# Optionally attempt to gracefully stop the background backend if needed
-if kill -0 $MAIN_PID 2>/dev/null; then
-    echo "Terminating main backend server (PID: $MAIN_PID)..."
-    kill $MAIN_PID
-    wait $MAIN_PID # Wait for it to actually terminate
+# Check if the backend server is still running
+if ! ps -p ${BACKEND_PID} > /dev/null; then
+    echo "Error: Main backend server failed to start. Check logs: ${LOG_FILE}"
+    # Optionally, display the log file content
+    echo "--- Displaying main_backend.log ---"
+    cat "${LOG_FILE}"
+    echo "------------------------------------"
+    exit 1
 fi
 
-echo "Exiting start script."
-exit $GATEWAY_EXIT_STATUS 
+# Start the web gateway server (web_gateway.py) in the foreground
+echo "Starting web gateway server (web_gateway.py) in foreground..."
+# The PORT variable is usually set by Render. Default to 8000 if not set.
+# Uvicorn binds to 0.0.0.0 to be accessible outside the container.
+exec uvicorn web_gateway:app --host 0.0.0.0 --port ${PORT:-3000} --reload
+
+# Note: --reload is typically for development. Consider removing it for production deployments. 

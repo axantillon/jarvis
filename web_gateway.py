@@ -28,6 +28,13 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "web_client")
 # --- FastAPI Application ---
 app = fastapi.FastAPI()
 
+# --- Health Check Endpoint ---
+# Dedicated endpoint for health checks (handles GET and HEAD)
+@app.api_route("/healthz", methods=["GET", "HEAD"])
+async def health_check():
+    """Simple health check endpoint."""
+    return fastapi.Response(content="OK", status_code=200)
+
 # --- WebSocket Proxy Endpoint ---
 async def forward_to_backend(client_ws: WebSocket, backend_ws):
     """Forwards messages from the client to the backend."""

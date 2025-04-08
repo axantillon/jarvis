@@ -7,6 +7,7 @@ import asyncio
 import sys
 import traceback
 from pathlib import Path
+import os
 
 from mcp import ClientSession, StdioServerParameters, types, Tool
 from mcp.client.stdio import stdio_client
@@ -97,9 +98,34 @@ class MCPCoordinator:
                 if not server_config.command:
                     raise ValueError(f"Missing command for stdio server {server_id}")
 
+                # --- Environment Variable Substitution ---
+                command = server_config.command
+                args = server_config.args or []
+                processed_args = []
+                try:
+                    for arg in args:
+                        if isinstance(arg, str) and arg.startswith("${") and arg.endswith("}"):
+                            var_name = arg[2:-1]
+                            value = os.environ.get(var_name)
+                            if value is None:
+                                print(f"[{server_id}] Environment variable '{var_name}' not found for arg '{arg}'. Using empty string.")
+                                processed_args.append("")
+                            else:
+                                processed_args.append(value)
+                                print(f"[{server_id}] Substituted '{arg}' with value from '{var_name}'.")
+                        else:
+                            processed_args.append(arg)
+                    print(f"[{server_id}] Launching stdio: command='{command}', processed_args={processed_args}")
+                except Exception as e:
+                    print(f"[{server_id}] Error processing arguments for env var substitution: {e}")
+                    task_failed = True
+                    setup_event.set()
+                    return # Don't proceed if args processing failed
+                # --- End Substitution ---
+
                 server_params = StdioServerParameters(
-                    command=server_config.command,
-                    args=server_config.args or [],
+                    command=command,            # Pass command separately
+                    args=processed_args,        # Pass processed args separately
                     env=server_config.env or {},
                 )
 
@@ -111,7 +137,7 @@ class MCPCoordinator:
                         await self._discover_tools_for_client(server_id, session, server_config)
                         setup_event.set()
                         await self._shutdown_event.wait()
-
+            
             elif server_config.transport == "sse":
                 print(f"[{server_id}] Warning: Unsupported transport 'sse'.")
                 task_failed = True
@@ -165,7 +191,7 @@ class MCPCoordinator:
             wait_task = asyncio.create_task(setup_event.wait(), name=f"wait_setup_{server_id}")
             wait_tasks_map[wait_task] = server_id
 
-        setup_timeout = 30.0
+        setup_timeout = 120.0 # Increased timeout to 120 seconds
         
         if not wait_tasks_map:
              return

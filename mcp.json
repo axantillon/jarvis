@@ -25,7 +25,11 @@
       "type": "local",
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/app/data"]
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${MCP_GIT_REPO}"
+      ]
     },
     "git": {
       "id": "git",
@@ -33,8 +37,8 @@
       "description": "Provides git access using a local file.",
       "type": "local",
       "transport": "stdio",
-      "command": "/usr/local/bin/mcp-server-git",
-      "args": ["--repository", "/app"]
+      "command": "python",
+      "args": ["-m", "mcp.server.git", "--repository", "${MCP_GIT_REPO}"]
     },
     "puppeteer": {
       "id": "puppeteer",

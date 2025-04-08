@@ -8,6 +8,9 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1 # Prevents python from writing .pyc files
 ENV PYTHONUNBUFFERED 1      # Force stdout/stderr streams to be unbuffered
+# Set default paths for MCP tools inside the container
+ENV MCP_FS_ROOT=/app/data
+ENV MCP_GIT_REPO=/app
 
 # Set the working directory in the container
 WORKDIR /app

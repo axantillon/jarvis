@@ -141,6 +141,9 @@ class MCPCoordinator:
                     env=server_config.env or {},
                 )
 
+                # Add logging for environment variables
+                print(f"[{server_id}] Launching with env: {server_params.env}")
+
                 async with stdio_client(server_params) as (read, write):
                     async with ClientSession(read, write) as session:
                         client_session_ref = session

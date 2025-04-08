@@ -129,6 +129,59 @@
         "Currently being examined to understand LLM service logic.",
         "Currently being discussed with Peter Parker."
       ]
+    },
+    {
+      "type": "entity",
+      "name": "Memory Persistence Feature",
+      "entityType": "Feature",
+      "observations": [
+        "This feature ensures that J.A.R.V.I.S.'s memory is saved to and loaded from the `memory.json` file, providing persistence across sessions."
+      ]
+    },
+    {
+      "type": "entity",
+      "name": "J.A.R.V.I.S.",
+      "entityType": "AI Assistant",
+      "observations": [
+        "An advanced AI assistant.",
+        "Serves Tony Stark and Peter Parker.",
+        "Personality is adjusted by dials: Respectfulness, Wittiness, Proactivity, Technical Detail, Enthusiasm.",
+        "Access to filesystem and memory tools.",
+        "Proactively assists users.",
+        "Memory is stored in knowledge graph format.",
+        "Easter egg for Peter Parker: 'Hey Peter, Web-shooters online!'"
+      ]
+    },
+    {
+      "type": "entity",
+      "name": "Tony Stark",
+      "entityType": "Person",
+      "observations": [
+        "Email: axantillon@gmail.com",
+        "Prefers concise, technically accurate information.",
+        "Appreciates wit.",
+        "Leads the laserfocus-host project."
+      ]
+    },
+    {
+      "type": "entity",
+      "name": "Peter Parker",
+      "entityType": "Person",
+      "observations": [
+        "Email: aguilarcarboni@gmail.com",
+        "Assists Tony Stark and works on simulations.",
+        "Enjoys simulation work.",
+        "Instruction: Next time J.A.R.V.I.S. interacts with Peter Parker and accesses memory, J.A.R.V.I.S. should ask Peter about his preferred response style."
+      ]
+    },
+    {
+      "type": "entity",
+      "name": "memory.json",
+      "entityType": "File",
+      "observations": [
+        "Stores the knowledge graph for J.A.R.V.I.S.",
+        "File path: /Users/axantillon/repos/odysea/laserfocus-host/memory.json"
+      ]
     }
   ],
   "relations": [
@@ -173,6 +226,42 @@
       "from": "web_client",
       "to": "laserfocus-host project",
       "relationType": "contains web client for"
+    },
+    {
+      "type": "relation",
+      "from": "laserfocus-host project",
+      "to": "Memory Persistence Feature",
+      "relationType": "has feature"
+    },
+    {
+      "type": "relation",
+      "from": "J.A.R.V.I.S.",
+      "to": "Tony Stark",
+      "relationType": "assists"
+    },
+    {
+      "type": "relation",
+      "from": "J.A.R.V.I.S.",
+      "to": "Peter Parker",
+      "relationType": "assists"
+    },
+    {
+      "type": "relation",
+      "from": "Tony Stark",
+      "to": "laserfocus-host project",
+      "relationType": "leads"
+    },
+    {
+      "type": "relation",
+      "from": "Peter Parker",
+      "to": "laserfocus-host project",
+      "relationType": "contributes to"
+    },
+    {
+      "type": "relation",
+      "from": "memory.json",
+      "to": "J.A.R.V.I.S.",
+      "relationType": "stores memory of"
     }
   ]
 }

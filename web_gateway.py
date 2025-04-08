@@ -172,7 +172,7 @@ async def websocket_proxy_endpoint(client_ws: WebSocket):
         await client_ws.close(code=1011, reason="Internal server error")
     finally:
         # Ensure backend connection is closed if it was opened
-        if backend_ws and not backend_ws.closed:
+        if backend_ws and backend_ws.open:
             await backend_ws.close()
             logger.info("Backend connection closed in finally block.")
         logger.info(f"Client disconnected: {client_ws.client}")

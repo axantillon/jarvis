@@ -3,8 +3,28 @@
 // Changes:
 // - Point wsUri to the gateway server's /ws endpoint
 // - Use relative path for WebSocket connection based on window location
+// - Removed separate login form, handling login via chat input ("email password").
 
 // const wsUri = "ws://localhost:8000/ws"; // Old: Hardcoded gateway address
+
+// --- HTML Element References ---
+// Remove Login Form elements
+// const loginForm = document.getElementById("loginForm");
+// const emailInput = document.getElementById("emailInput");
+// const passwordInput = document.getElementById("passwordInput");
+// const connectButton = document.getElementById("connectButton");
+// const loginError = document.getElementById("loginError");
+const chatbox = document.getElementById("chatbox"); // Keep chatbox ref
+
+const messageInput = document.getElementById("messageInput");
+const sendButton = document.getElementById("sendButton");
+const messagesDiv = document.getElementById("messages");
+const promptSpan = document.getElementById("prompt");
+const statusIndicator = document.getElementById("status-indicator");
+
+let websocket;
+let currentJarvisMessageDiv = null; // To append streaming text
+let isAuthenticated = false; // Track authentication state
 
 // Determine WebSocket protocol (ws/wss) based on page protocol (http/https)
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -29,21 +49,24 @@ const wsUri = `${wsProtocol}//${wsHost}/ws`;
 
 console.log("WebSocket URI configured to:", wsUri); // Add log for debugging
 
-const messageInput = document.getElementById("messageInput");
-const sendButton = document.getElementById("sendButton");
-const messagesDiv = document.getElementById("messages");
-const promptSpan = document.getElementById("prompt");
-const statusIndicator = document.getElementById("status-indicator");
-let websocket;
-let currentJarvisMessageDiv = null; // To append streaming text
-
 function initWebSocket() {
-  console.log(`Attempting to connect to Gateway WebSocket: ${wsUri}`); // Updated log
+  // Connect automatically on load
+  if (
+    websocket &&
+    (websocket.readyState === WebSocket.CONNECTING ||
+      websocket.readyState === WebSocket.OPEN)
+  ) {
+    console.log("WebSocket connection already in progress or open.");
+    return;
+  }
+
+  console.log(`Attempting to connect to Gateway WebSocket: ${wsUri}`);
   addSystemMessage("Connecting to gateway...", "status");
   setPromptState("disconnected");
   websocket = new WebSocket(wsUri);
 
   websocket.onopen = function (evt) {
+    // Don't pass credentials anymore
     onOpen(evt);
   };
   websocket.onclose = function (evt) {
@@ -58,16 +81,18 @@ function initWebSocket() {
 }
 
 function onOpen(evt) {
-  console.log("GATEWAY CONNECTED"); // Updated log
-  // The actual "Connected. Session ID: ..." message will come *from the backend*
-  // relayed through the gateway, so we might just show a simpler message here.
+  console.log("GATEWAY CONNECTED");
+  // Don't send auth immediately
+  // Instead, prompt user and enable input
   addSystemMessage(
-    "Connected to gateway. Waiting for backend...",
+    "Connected. Please log in by typing: your-email@example.com yourpassword",
     "connection"
   );
-  // Input might be enabled slightly later when the *backend* connection message arrives.
-  // For simplicity now, enable it here. Could be refined.
-  // enableInput();
+  // Enable input, but don't set isAuthenticated yet
+  messageInput.disabled = false;
+  sendButton.disabled = false;
+  setPromptState("ready"); // Or a custom "login" state?
+  messageInput.focus();
 }
 
 function onClose(evt) {
@@ -76,9 +101,11 @@ function onClose(evt) {
     `Disconnected: ${evt.reason || "No reason provided"} (Code: ${evt.code})`,
     "error"
   );
+  // Reset state regardless of previous auth status
   disableInput("disconnected");
-  // Optional: Try to reconnect after a delay
-  // setTimeout(initWebSocket, 5000);
+  isAuthenticated = false; // Reset auth state
+  websocket = null; // Clear websocket reference
+  // Optional: Add reconnect logic here if desired
 }
 
 function onMessage(evt) {
@@ -88,6 +115,54 @@ function onMessage(evt) {
     const message = JSON.parse(evt.data);
     const msg_type = message.type;
     const payload = message.payload || {};
+
+    // --- Handle Authentication Responses ---
+    if (msg_type === "auth_success") {
+      console.log("Auth Success: Received auth_success message.");
+      isAuthenticated = true;
+      // hideLoginError(); // Removed
+      // showChatInterface(); // Removed - already in chat interface
+      addSystemMessage(
+        `Authentication successful! Session ID: ${payload.sessionId}`,
+        "connection"
+      );
+      enableInput(); // Ensure input is enabled
+      messageInput.placeholder = "Type your message..."; // Change placeholder
+      return; // Stop processing this message further
+    }
+    if (msg_type === "auth_failed") {
+      console.log("Auth Failed: Received auth_failed message.");
+      isAuthenticated = false;
+      // showLoginError(payload.message || "Authentication failed."); // Show in chat
+      addSystemMessage(
+        `Login Failed: ${
+          payload.message || "Please try again."
+        } Use format: email password`,
+        "error"
+      );
+      // Don't close connection, allow retry
+      // if (websocket) {
+      //      websocket.close(1000, "Authentication Failed Client Side");
+      // }
+      // showLoginForm(); // Removed
+      enableInput(); // Ensure input is enabled for retry
+      return; // Stop processing this message further
+    }
+
+    // --- If already authenticated, handle regular chat messages ---
+    if (!isAuthenticated) {
+      // This case should ideally not happen if server behaves correctly
+      // (i.e., doesn't send chat messages before successful auth)
+      console.warn("Received non-auth message before authentication:", message);
+      addSystemMessage(
+        "Received unexpected message before login. Please login first.",
+        "error"
+      );
+      return;
+    }
+
+    // Log authenticated message types
+    console.log(`Authenticated message received: Type=${msg_type}`);
 
     switch (msg_type) {
       case "text":
@@ -108,21 +183,18 @@ function onMessage(evt) {
           `ERROR: ${payload.message || "Unknown error"}`,
           "error"
         );
-        // Optionally re-enable input on server-side error if appropriate
-        enableInput(); // Re-enable input after error message
+        enableInput(); // Re-enable input after server error
         break;
       case "end":
         currentJarvisMessageDiv = null; // End potential streaming
         enableInput(); // Re-enable input when server signals end
         break;
-      case "connection": // Server confirms connection details
+      case "connection": // This might be redundant now with auth_success
         currentJarvisMessageDiv = null; // End potential streaming
-        // Update connection message or add session ID if needed
-        addSystemMessage(
-          `Connected. Session ID: ${payload.sessionId}`,
-          "connection"
-        );
-        enableInput(); // Ensure input is enabled after connection confirmation
+        // We already handled the main connection confirmation in auth_success
+        console.log("Received legacy connection message (ignoring):");
+        // addSystemMessage(`Connected. Session ID: ${payload.sessionId}`, "connection");
+        // enableInput(); // Ensure input is enabled after connection confirmation
         break;
       default:
         console.warn("Received unknown message type:", msg_type);
@@ -132,24 +204,64 @@ function onMessage(evt) {
     console.error("Error parsing message or processing:", e);
     addSystemMessage(`Error processing server message: ${e.message}`, "error");
     currentJarvisMessageDiv = null; // End potential streaming
-    enableInput(); // Try to recover input ability
+    // Re-enable input cautiously
+    enableInput();
   }
   scrollToBottom();
 }
 
 function onError(evt) {
   console.error("WebSocket Error:", evt);
-  // The 'onclose' event will usually fire immediately after 'onerror'
-  // Add a generic error message here, onClose will handle the disconnected state
   addSystemMessage("WebSocket error occurred. Check console.", "error");
   hideProcessingIndicator();
-  disableInput("disconnected"); // Ensure input is disabled on error
+  disableInput("disconnected"); // Disable input on error
+  isAuthenticated = false; // Reset auth state
   currentJarvisMessageDiv = null; // End potential streaming
+  websocket = null; // Clear websocket reference
+  // onClose will likely be called after this
 }
 
+// --- Updated sendMessage to handle login attempt ---
 function sendMessage() {
   const messageText = messageInput.value.trim();
-  if (messageText && websocket && websocket.readyState === WebSocket.OPEN) {
+  if (!messageText || !websocket || websocket.readyState !== WebSocket.OPEN) {
+    console.warn("Cannot send. WebSocket not open or message empty.");
+    if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+      addSystemMessage("Not connected. Please wait or refresh.", "error");
+    }
+    return;
+  }
+
+  if (!isAuthenticated) {
+    // Attempting login
+    const parts = messageText.split(/\s+/); // Split by whitespace
+    if (parts.length >= 2) {
+      const email = parts[0];
+      const password = parts.slice(1).join(" "); // Handle passwords with spaces
+
+      const authMessage = {
+        type: "auth",
+        email: email,
+        password: password,
+      };
+      console.log("SENDING AUTH:", JSON.stringify(authMessage));
+      websocket.send(JSON.stringify(authMessage));
+
+      addUserMessage(messageText); // Show what user typed
+      addSystemMessage("Attempting login...", "status");
+      messageInput.value = "";
+      disableInput("processing"); // Disable input during auth attempt
+      showProcessingIndicator();
+    } else {
+      // Invalid login format
+      addSystemMessage(
+        "Invalid login format. Use: your-email@example.com yourpassword",
+        "error"
+      );
+      messageInput.value = ""; // Clear input
+    }
+  } else {
+    // Already authenticated, send regular message
     if (messageText.toLowerCase() === "quit") {
       addSystemMessage("Disconnecting...", "status");
       websocket.close();
@@ -164,17 +276,11 @@ function sendMessage() {
     console.log("SENDING:", JSON.stringify(messageToSend));
     websocket.send(JSON.stringify(messageToSend));
 
-    // Display user message immediately
     addUserMessage(messageText);
     messageInput.value = "";
-    disableInput("processing"); // Disable input while waiting for response
-    showProcessingIndicator(); // Show processing indicator
-    currentJarvisMessageDiv = null; // Reset for next response
-  } else {
-    console.warn("Cannot send message. WebSocket not open or message empty.");
-    if (!websocket || websocket.readyState !== WebSocket.OPEN) {
-      addSystemMessage("Not connected. Please wait or refresh.", "error");
-    }
+    disableInput("processing");
+    showProcessingIndicator();
+    currentJarvisMessageDiv = null;
   }
   scrollToBottom();
 }
@@ -235,11 +341,13 @@ function addSystemMessage(text, type) {
 }
 
 function enableInput() {
+  // Only enable if authenticated
+  if (!isAuthenticated) return;
   messageInput.disabled = false;
   sendButton.disabled = false;
-  setPromptState("ready");
-  hideProcessingIndicator();
-  messageInput.focus(); // Focus input when ready
+  setPromptState("connected");
+  // Maybe focus input?
+  // messageInput.focus();
 }
 
 function disableInput(reason = "processing") {
@@ -273,16 +381,21 @@ function scrollToBottom() {
 }
 
 // --- Event Listeners ---
-
 sendButton.addEventListener("click", sendMessage);
-
-messageInput.addEventListener("keypress", function (event) {
-  // Check if Enter key was pressed (key code 13)
-  if (event.key === "Enter" || event.keyCode === 13) {
-    event.preventDefault(); // Prevent default form submission/newline
+messageInput.addEventListener("keypress", function (e) {
+  if (e.key === "Enter") {
     sendMessage();
   }
 });
 
+// Remove listener for the connect button
+// if (connectButton) { ... }
+
 // --- Initialization ---
-document.addEventListener("DOMContentLoaded", initWebSocket); // Start WebSocket connection when the page loads
+document.addEventListener("DOMContentLoaded", () => {
+  // Connect automatically now
+  initWebSocket();
+  // Don't need to manage login form visibility
+  // showLoginForm();
+  disableInput("disconnected"); // Start with input disabled until connected
+});

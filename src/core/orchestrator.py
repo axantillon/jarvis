@@ -4,6 +4,7 @@
 # Changes:
 # - Initial implementation.
 # - Implemented handle_input logic including LLM calls and tool execution flow.
+# - Modified handle_input to accept and pass a user-specific system_prompt.
 
 import asyncio
 import traceback
@@ -139,12 +140,20 @@ class ConversationOrchestrator:
         self,
         session_id: str,
         text: str,
-        llm_config: Optional[LLMConfig] = None # LLMConfig is defined in llm_service.py
+        llm_config: Optional[LLMConfig] = None, # LLMConfig is defined in llm_service.py
+        system_prompt: Optional[str] = None      # Added: User-specific system prompt
     ) -> AsyncGenerator[LLMResponsePart, None]:
         """
         Handles user input, generates responses, and manages tool calls.
 
-        Yields LLMResponsePart objects representing the conversation turn.
+        Args:
+            session_id: The unique identifier for the conversation session.
+            text: The user's input text.
+            llm_config: Optional configuration for the LLM call.
+            system_prompt: Optional user-specific system prompt to override the default.
+
+        Yields:
+            LLMResponsePart objects representing the conversation turn.
         """
         current_llm_config = llm_config if llm_config is not None else LLMConfig({})
         session_history = self._get_history(session_id)
@@ -170,7 +179,8 @@ class ConversationOrchestrator:
                 response_stream = self.llm_service.generate_response(
                     history=history_for_llm,
                     tool_definitions=tool_definitions,
-                    config=current_llm_config
+                    config=current_llm_config,
+                    system_prompt=system_prompt # Pass the user-specific prompt
                 )
 
                 # 2. Process LLM response stream
@@ -216,6 +226,14 @@ class ConversationOrchestrator:
                         # Optionally add a system message to history about the error?
                         # self._add_message(session_id, ChatMessage(role='system', content=f"LLM Error: {part.message}", data=part.details))
                         # Decide whether to break or continue based on error severity? For now, continue if possible.
+
+                    # --- ADDED: Handle EndOfTurn --- #
+                    elif isinstance(part, EndOfTurn):
+                        # This signal is used by the LLMService to indicate completion.
+                        # The Orchestrator itself doesn't need to do anything with it here,
+                        # as the WebSocketHandler will handle formatting it for the client.
+                        # We just need to prevent it falling into the 'else' block below.
+                        pass # Explicitly ignore it in the orchestrator loop
 
                     else:
                          # Should not happen if LLMResponsePart is defined correctly

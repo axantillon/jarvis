@@ -7,16 +7,19 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- Removed h1 and loginForm -->
+
+    <!-- Original Chatbox Structure -->
     <div id="chatbox">
       <div id="messages">
         <!-- Messages will be added here -->
       </div>
-      <div id="input-area">
-        <span id="prompt" class="prompt-ready">&gt;&gt;&gt; </span>
+      <div class="input-area">
+        <span id="prompt"></span>
         <input
           type="text"
           id="messageInput"
-          placeholder="Type your message..."
+          placeholder="Type your message... or 'email password' to login"
           disabled
         />
         <button id="sendButton" disabled>Send</button>

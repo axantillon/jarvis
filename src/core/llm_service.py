@@ -10,6 +10,8 @@
 # - Removed dependency on server_tool_prompts for prompt compilation.
 # - Reverted _parse_stream to the original (always buffer) logic for simplicity.
 # - Refined LLMConfig: Removed api_key, made model/safety optional overrides.
+# - Modified generate_response and _compile_system_prompt to handle user-specific system prompts.
+# - Corrected generate_response to pass prompt/history as a dict to the adapter.
 
 import asyncio
 import json
@@ -150,6 +152,7 @@ class LLMService:
 
     def _compile_system_prompt(
         self,
+        base_prompt_content: str, # Added: The base content to use
         tool_definitions: List[ToolDefinition]
     ) -> str:
         """
@@ -161,12 +164,13 @@ class LLMService:
         text around tool calls.
 
         Args:
+            base_prompt_content: The base system instructions (potentially user-specific).
             tool_definitions: A list of available tools with their definitions.
 
         Returns:
             The complete system prompt string.
         """
-        prompt_lines = [self._base_system_prompt]
+        prompt_lines = [base_prompt_content]
         prompt_lines.append("\n--- Tool Usage Instructions ---")
 
         if not tool_definitions:
@@ -248,54 +252,52 @@ class LLMService:
         self,
         history: List[ChatMessage],
         tool_definitions: List[ToolDefinition],
-        config: LLMConfig # This is the config passed by the caller (e.g., Orchestrator)
+        config: LLMConfig, # This is the config passed by the caller (e.g., Orchestrator)
+        system_prompt: Optional[str] = None # Added: User-specific override
     ) -> AsyncGenerator[LLMResponsePart, None]:
         """
-        Generates the next part of the conversation using the configured LLM adapter.
-
-        Streams response parts (text or tool calls) back to the caller.
-        NOTE: system_instruction and safety_settings from LLMConfig are currently
-              ignored by the adapter's streaming method due to SDK limitations/signature.
+        Generates a response from the LLM based on history and available tools.
 
         Args:
-            history: The current conversation history.
-            tool_definitions: List of available tools from coordinator registry.
-            config: Configuration for THIS LLM call (temperature, tokens, optional model name override).
+            history: The conversation history (excluding system prompt).
+            tool_definitions: List of tools available for the LLM.
+            config: Configuration for the LLM call.
+            system_prompt: Optional user-specific system prompt to use instead of the default.
 
         Yields:
-            LLMResponsePart objects (TextChunk, ToolCallIntent, or ErrorInfo).
+            LLMResponsePart objects representing text chunks, tool intents, or errors.
         """
         try:
-            system_prompt = self._compile_system_prompt(tool_definitions)
+            # 1. Determine the effective base prompt
+            effective_base_prompt = system_prompt if system_prompt is not None else self._base_system_prompt
 
-            prompt_and_history_for_adapter = {
-                 "system_prompt": system_prompt,
-                 "history": history
-            }
-
-            # Prepare config to pass to adapter.
-            # ONLY pass overrides from the input 'config'.
-            # Let the adapter handle its own defaults (like model_name).
-            adapter_config = LLMConfig({}) # Start with empty config
-            if 'temperature' in config and config['temperature'] is not None:
-                 adapter_config['temperature'] = config['temperature']
-            if 'max_output_tokens' in config and config['max_output_tokens'] is not None:
-                 adapter_config['max_output_tokens'] = config['max_output_tokens']
-            if 'model_name' in config and config['model_name'] is not None:
-                 # Pass the override if explicitly provided by the caller
-                 adapter_config['model_name'] = config['model_name']
-            # NOTE: safety_settings is omitted as it doesn't work with stream method
-
-            raw_stream = self._adapter.stream_generate(
-                prompt_and_history=prompt_and_history_for_adapter,
-                config=adapter_config # Pass the potentially sparse config
+            # 2. Compile the full system prompt including tool definitions
+            compiled_system_prompt_str = self._compile_system_prompt(
+                base_prompt_content=effective_base_prompt,
+                tool_definitions=tool_definitions
             )
 
+            # 3. Corrected: Prepare input as a dictionary for GeminiAdapter
+            prompt_and_history_for_adapter = {
+                "system_prompt": compiled_system_prompt_str,
+                "history": history # Pass the original history; adapter handles formatting
+            }
+
+            # 4. Call the adapter to get the raw stream
+            print("LLM Service: Calling adapter stream_generate...") # Logging
+            raw_stream = self._adapter.stream_generate(
+                prompt_and_history=prompt_and_history_for_adapter, # Pass combined prompt+history
+                config=config
+            )
+
+            # 5. Parse the raw stream and yield structured parts
             async for part in self._parse_stream(raw_stream):
                 yield part
 
+            # 6. Signal end of turn after stream finishes successfully
+            yield EndOfTurn()
+
         except Exception as e:
-            yield ErrorInfo(
-                message=f"Failed to generate LLM response: {e}",
-                details=traceback.format_exc()
-            )
+            error_details = traceback.format_exc()
+            print(f"LLM Service: Error during generate_response: {e}\n{error_details}")
+            yield ErrorInfo(message=f"Error generating response: {e}", details=error_details)

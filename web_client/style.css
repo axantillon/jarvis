@@ -89,7 +89,7 @@ body {
   width: 100%;
 }
 
-#input-area {
+.input-area {
   display: flex;
   padding: 10px;
   background-color: #333333;
@@ -157,3 +157,9 @@ body {
 .status-hidden {
   display: none;
 }
+
+/* Add styles for the login form */
+/* Position it absolutely to center it without interfering with body flex */
+/* --- REMOVE ALL #loginForm styles --- */
+
+/* End Login Form Styles */

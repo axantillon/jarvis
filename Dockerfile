@@ -38,8 +38,8 @@ RUN apt-get update && \
     NODE_MAJOR=20 && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
-    # Install specific Node.js version if the default 'nodejs' isn't sufficient (usually it is)
-    # apt-get install nodejs -y && \
+    # Install specific Node.js version from NodeSource repo
+    apt-get install nodejs -y && \
     # Clean up apt cache to reduce image size
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

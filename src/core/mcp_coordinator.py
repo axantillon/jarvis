@@ -115,6 +115,7 @@ class MCPCoordinator:
                                 print(f"[{server_id}] Substituted '{arg}' with value from '{var_name}'.")
                         else:
                             processed_args.append(arg)
+
                     print(f"[{server_id}] Launching stdio: command='{command}', processed_args={processed_args}")
                 except Exception as e:
                     print(f"[{server_id}] Error processing arguments for env var substitution: {e}")

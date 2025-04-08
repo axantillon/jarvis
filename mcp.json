@@ -38,7 +38,8 @@
       "type": "local",
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer", "--no-sandbox"],
+      "timeout_ms": 60000
     }
   }
 }

@@ -2,6 +2,7 @@
 # start.sh
 # Entrypoint script for the Docker container
 # Added verification for memory.json readability and exported path
+# Removed ps check (ps not available in slim image)
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
@@ -41,17 +42,11 @@ echo "Main backend server PID: ${BACKEND_PID}"
 
 # Wait a few seconds to allow the backend server to initialize
 # Adjust sleep duration if needed
+echo "Waiting briefly for backend server..."
 sleep 5
 
-# Check if the backend server is still running
-if ! ps -p ${BACKEND_PID} > /dev/null; then
-    echo "Error: Main backend server failed to start. Check logs: ${LOG_FILE}"
-    # Optionally, display the log file content
-    echo "--- Displaying main_backend.log ---"
-    cat "${LOG_FILE}"
-    echo "------------------------------------"
-    exit 1
-fi
+# Removed ps check block - ps command not available in slim image
+# If backend fails, it should log to ${LOG_FILE}
 
 # Start the web gateway server (web_gateway.py) in the foreground
 echo "Starting web gateway server (web_gateway.py) in foreground..."

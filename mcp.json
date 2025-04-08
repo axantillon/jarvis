@@ -9,7 +9,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-memory"],
       "env": {
-        "MEMORY_FILE_PATH": "/app/memory.json"
+        "MEMORY_FILE_PATH": "/memory.json"
       }
     },
     "sequential-thinking": {

@@ -37,8 +37,8 @@
       "description": "Provides git access using a local file.",
       "type": "local",
       "transport": "stdio",
-      "command": "uv",
-      "args": ["run", "mcp-server-git", "--repository", "/app"]
+      "command": "mcp-server-git",
+      "args": ["--repository", "/app"]
     },
     "puppeteer": {
       "id": "puppeteer",

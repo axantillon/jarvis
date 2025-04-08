@@ -9,7 +9,8 @@
 // Determine WebSocket protocol (ws/wss) based on page protocol (http/https)
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 // Construct WebSocket URI relative to the current host
-const wsUri = `${wsProtocol}//${window.location.host}/ws`;
+// const wsUri = `${wsProtocol}//${window.location.host}/ws`;
+const wsUri = `ws://localhost:8765`; // index.html
 
 const messageInput = document.getElementById("messageInput");
 const sendButton = document.getElementById("sendButton");

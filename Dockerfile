@@ -29,8 +29,7 @@ COPY src ./src
 COPY web_client ./web_client
 COPY web_gateway.py .
 COPY start.sh .
-# Copy any other necessary files like mcp.json if it's at the root
-# COPY mcp.json .
+COPY mcp.json .
 
 # Make the start script executable
 RUN chmod +x ./start.sh

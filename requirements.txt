@@ -1,11 +1,12 @@
 # requirements.txt
 # Dependencies for both the main server and the web gateway
 
-websockets
-fastapi
-uvicorn[standard] # Includes standard dependencies like watchfiles for reload
-python-dotenv    # For loading .env file
-google-genai # Use the NEW SDK package name
-google-api-core # Core library needed by google-genai
-mcp[cli]>=1.6.0 # MCP library dependency
+websockets==12.0
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+python-dotenv==1.0.1
+google-genai==0.7.1 # Example version, check yours
+google-api-core==2.19.0 # Example version, check yours
+mcp[cli]>=1.6.0 # Keep this range or pin specific MCP version
+bcrypt==4.1.3 # Added bcrypt
 # Add any other *external* libraries imported directly or indirectly if needed 

@@ -33,7 +33,7 @@
       "description": "Provides git access using a local file.",
       "type": "local",
       "transport": "stdio",
-      "command": "mcp-server-git",
+      "command": "/usr/local/bin/mcp-server-git",
       "args": ["--repository", "/app"]
     },
     "puppeteer": {

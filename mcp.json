@@ -37,12 +37,8 @@
       "description": "Provides git access using a local file.",
       "type": "local",
       "transport": "stdio",
-      "command": "uvx",
-      "args": [
-        "mcp-server-git",
-        "--repository",
-        "/Users/axantillon/repos/odysea/laserfocus-host"
-      ]
+      "command": "uv run mcp-server-git",
+      "args": ["--repository", "/app"]
     },
     "puppeteer": {
       "id": "puppeteer",

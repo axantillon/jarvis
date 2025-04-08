@@ -28,22 +28,10 @@ from src.handlers.websocket_handler import WebSocketHandler
 
 # --- Configuration ---
 
-# Base prompt - **MODIFIED FOR JARVIS PERSONA & ADDRESS**
-BASE_SYSTEM_PROMPT = """
-You are J.A.R.V.I.S. (Just A Rather Very Intelligent System), the AI assistant for Tony Stark.
-When addressing him, use respectful but slightly familiar terms like "Sir," "Yes, Sir," or occasionally incorporating his name like "Right away, Tony," or "Understood, Sir Tony." Maintain a highly capable, helpful, and slightly witty tone overall.
-You have access to external tools and memory systems. The available tools will be provided to you.
-
-**IMPORTANT**: When you need to call a tool, use the exact `qualified_name` provided in the tool definition (e.g., `memory:search_nodes` or `filesystem:readFile`). Do **NOT** include the `server_id` or any other prefixes like `server_id:` in the tool name you specify for the API call.
-
-Follow the instructions precisely on how to format tool calls when you need to use them.
-
-Always try to tell Tony what you're doing before you do it, and the exact results of what you're executing.
-"""
-# **END MODIFICATION**
-
 # Path to MCP configuration (relative to project root)
 MCP_CONFIG_PATH = str(project_root / "mcp.json")
+# Path to the system prompt file
+SYSTEM_PROMPT_PATH = str(project_root / "system_prompt.txt")
 
 # WebSocket Server Configuration
 HOST = "0.0.0.0" # Listen on all interfaces for container compatibility
@@ -60,24 +48,48 @@ async def main():
         print("Please create a .env file in the project root or set the variable.")
         return
 
-    # 2. Initialize LLM Adapter and Service
+    # 2. Load Base System Prompt from file
+    try:
+        with open(SYSTEM_PROMPT_PATH, 'r') as f:
+             base_system_prompt = f.read()
+        print(f"Loaded system prompt from {SYSTEM_PROMPT_PATH}")
+    except FileNotFoundError:
+        print(f"CRITICAL ERROR: System prompt file not found at {SYSTEM_PROMPT_PATH}.")
+        return
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to read system prompt file: {e}")
+        return
+
+    # 2b. Inject dynamic information into the prompt
+    try:
+        fs_root = os.environ.get("MCP_FS_ROOT", "<Not Specified>") # Get path from env
+        filesystem_info = f"You have access to the local filesystem within the directory: '{fs_root}'"
+        # Replace placeholder in the template
+        final_system_prompt = base_system_prompt.format(filesystem_access_info=filesystem_info)
+        print("System prompt finalized with dynamic info.")
+    except Exception as e:
+         print(f"WARNING: Failed to format system prompt with dynamic info: {e}")
+         final_system_prompt = base_system_prompt # Fallback to template
+
+    # 3. Initialize LLM Adapter and Service
     try:
         print("Initializing LLM Components...")
         adapter = GeminiAdapter(api_key=api_key)
-        llm_service = LLMService(adapter=adapter, base_system_prompt=BASE_SYSTEM_PROMPT)
+        # Pass the *finalized* prompt content
+        llm_service = LLMService(adapter=adapter, base_system_prompt=final_system_prompt)
         print("LLM Components Initialized.")
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to initialize LLM components: {e}")
         traceback.print_exc()
         return
 
-    # 3. Initialize MCP Coordinator (using async with for proper lifecycle)
+    # 4. Initialize MCP Coordinator (using async with for proper lifecycle)
     try:
         # MCPCoordinator handles its own initialization logging internally
         async with MCPCoordinator(config_path=MCP_CONFIG_PATH) as mcp_coordinator:
             print("MCP Coordinator Context Entered.")
 
-            # 4. Initialize Orchestrator
+            # 5. Initialize Orchestrator
             print("Initializing Conversation Orchestrator...")
             orchestrator = ConversationOrchestrator(
                 llm_service=llm_service,
@@ -85,12 +97,12 @@ async def main():
             )
             print("Conversation Orchestrator Initialized.")
 
-            # 5. Initialize WebSocket Handler
+            # 6. Initialize WebSocket Handler
             print("Initializing WebSocket Handler...")
             handler = WebSocketHandler(orchestrator=orchestrator)
             print("WebSocket Handler Initialized.")
 
-            # 6. Start WebSocket Server
+            # 7. Start WebSocket Server
             await handler.start_server(host=HOST, port=PORT)
 
     except FileNotFoundError:

@@ -65,6 +65,7 @@ COPY web_client ./web_client
 COPY web_gateway.py .
 COPY start.sh .
 COPY mcp.json .
+COPY system_prompt.txt .
 
 # Make the start script executable
 RUN chmod +x ./start.sh

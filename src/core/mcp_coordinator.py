@@ -56,8 +56,19 @@ class MCPCoordinator:
         try:
             with open(self.config_path) as f:
                 raw_config = json.load(f)
+
+            # --- Filter servers based on environment variable --- 
+            servers_to_load = raw_config.get("servers", {})
+            skip_puppeteer = os.environ.get("SKIP_PUPPETEER", "false").lower() in ["true", "1"]
+            if skip_puppeteer and "puppeteer" in servers_to_load:
+                print("Coordinator: SKIP_PUPPETEER is set, removing puppeteer server from config.")
+                del servers_to_load["puppeteer"]
+            # --- End Filter ---
+
             configs = {}
-            for server_id, server_data in raw_config.get("servers", {}).items():
+            # Iterate over the potentially filtered dictionary
+            for server_id, server_data in servers_to_load.items():
+                # Ensure 'id' isn't passed to ServerConfig constructor if it exists
                 server_data.pop('id', None)
                 configs[server_id] = ServerConfig(**server_data)
             print(f"Coordinator: Config loaded for {len(configs)} servers.")

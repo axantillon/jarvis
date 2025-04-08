@@ -28,18 +28,8 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "${MCP_GIT_REPO}"
+        "${MCP_FS_ROOT}"
       ]
-    },
-    "puppeteer": {
-      "id": "puppeteer",
-      "name": "Puppeteer Server",
-      "description": "Provides puppeteer access using a local file.",
-      "type": "local",
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-puppeteer", "--no-sandbox"],
-      "timeout_ms": 60000
     }
   }
 }

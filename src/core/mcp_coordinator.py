@@ -57,13 +57,13 @@ class MCPCoordinator:
             with open(self.config_path) as f:
                 raw_config = json.load(f)
 
-            # --- Filter servers based on environment variable --- 
+            # --- Removed SKIP_PUPPETEER check - rely only on mcp.json content --- 
             servers_to_load = raw_config.get("servers", {})
-            skip_puppeteer = os.environ.get("SKIP_PUPPETEER", "false").lower() in ["true", "1"]
-            if skip_puppeteer and "puppeteer" in servers_to_load:
-                print("Coordinator: SKIP_PUPPETEER is set, removing puppeteer server from config.")
-                del servers_to_load["puppeteer"]
-            # --- End Filter ---
+            # skip_puppeteer = os.environ.get("SKIP_PUPPETEER", "false").lower() in ["true", "1"]
+            # if skip_puppeteer and "puppeteer" in servers_to_load:
+            #     print("Coordinator: SKIP_PUPPETEER is set, removing puppeteer server from config.")
+            #     del servers_to_load["puppeteer"]
+            # --- End Removed Filter ---
 
             configs = {}
             # Iterate over the potentially filtered dictionary

@@ -5,7 +5,7 @@ body {
   background-color: #1e1e1e;
   color: #d4d4d4;
   margin: 0;
-  padding: 20px;
+  padding: 0; /* Remove body padding */
   display: flex;
   justify-content: center;
   align-items: center;
@@ -13,21 +13,23 @@ body {
 }
 
 #chatbox {
-  width: 80%;
-  max-width: 800px;
-  height: 80vh;
+  width: 100%; /* Use full available width */
+  max-width: 1000px; /* Keep max-width */
+  height: 85vh;
   border: 1px solid #555;
   background-color: #252526;
   display: flex;
   flex-direction: column;
   border-radius: 5px;
   overflow: hidden; /* Prevents content spill */
+  box-sizing: border-box; /* Include padding/border in width/height */
+  padding: 10px; /* Add padding inside chatbox */
 }
 
 #messages {
   flex-grow: 1;
   overflow-y: auto;
-  padding: 15px;
+  /* Padding moved to #chatbox */
   border-bottom: 1px solid #555;
   display: flex;
   flex-direction: column; /* Ensure messages stack vertically */
@@ -35,8 +37,9 @@ body {
 
 .message {
   margin-bottom: 10px;
-  white-space: pre-wrap; /* Preserve whitespace and wrap lines */
-  word-wrap: break-word; /* Break long words */
+  /* Removed white-space: pre-wrap; Let block elements like p wrap naturally */
+  overflow-wrap: break-word;
+  /* Ensure overflow-x is not set here */
 }
 
 .message.user {
@@ -48,11 +51,26 @@ body {
   color: #4ec9b0; /* Teal for Jarvis */
   align-self: flex-start; /* Align Jarvis messages to left */
   margin-left: 20px; /* Indent Jarvis messages */
+  /* Removed word-break: break-all; Rely on base .message overflow */
 }
 .message.jarvis .sender {
   font-weight: bold;
   display: block; /* Ensure sender is on its own line */
   margin-bottom: 3px;
+}
+
+/* Style for code blocks within Jarvis messages */
+/* Target both pre and code tags for robust wrapping */
+.message.jarvis pre,
+.message.jarvis code {
+  display: block; /* Ensure blocks take full width */
+  white-space: pre-wrap; /* Preserve whitespace but allow wrapping */
+  word-break: break-word; /* Break long lines/words (preferable to break-all) */
+  background-color: rgba(0, 0, 0, 0.2); /* Slightly darker background */
+  padding: 5px; /* Add some padding */
+  border-radius: 3px;
+  margin-top: 5px; /* Add space above block */
+  overflow-x: auto; /* Add scroll as fallback if wrapping fails */
 }
 
 .message.status {

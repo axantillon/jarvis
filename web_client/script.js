@@ -1,9 +1,16 @@
 // web_client/script.js
 // --- WebSocket Client Logic for Web Interface ---
 // Changes:
-// - Initial implementation for web client
+// - Point wsUri to the gateway server's /ws endpoint
+// - Use relative path for WebSocket connection based on window location
 
-const wsUri = "ws://localhost:8765"; // Replace with your server URI if different
+// const wsUri = "ws://localhost:8000/ws"; // Old: Hardcoded gateway address
+
+// Determine WebSocket protocol (ws/wss) based on page protocol (http/https)
+const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+// Construct WebSocket URI relative to the current host
+const wsUri = `${wsProtocol}//${window.location.host}/ws`;
+
 const messageInput = document.getElementById("messageInput");
 const sendButton = document.getElementById("sendButton");
 const messagesDiv = document.getElementById("messages");
@@ -13,8 +20,8 @@ let websocket;
 let currentJarvisMessageDiv = null; // To append streaming text
 
 function initWebSocket() {
-  console.log("Attempting to connect to WebSocket...");
-  addSystemMessage("Connecting to server...", "status");
+  console.log(`Attempting to connect to Gateway WebSocket: ${wsUri}`); // Updated log
+  addSystemMessage("Connecting to gateway...", "status");
   setPromptState("disconnected");
   websocket = new WebSocket(wsUri);
 
@@ -33,9 +40,16 @@ function initWebSocket() {
 }
 
 function onOpen(evt) {
-  console.log("CONNECTED");
-  addSystemMessage("Connected to WebSocket server.", "connection"); // Clearer message
-  enableInput();
+  console.log("GATEWAY CONNECTED"); // Updated log
+  // The actual "Connected. Session ID: ..." message will come *from the backend*
+  // relayed through the gateway, so we might just show a simpler message here.
+  addSystemMessage(
+    "Connected to gateway. Waiting for backend...",
+    "connection"
+  );
+  // Input might be enabled slightly later when the *backend* connection message arrives.
+  // For simplicity now, enable it here. Could be refined.
+  // enableInput();
 }
 
 function onClose(evt) {

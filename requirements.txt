@@ -1,0 +1,9 @@
+# requirements.txt
+# Dependencies for both the main server and the web gateway
+
+websockets
+fastapi
+uvicorn[standard] # Includes standard dependencies like watchfiles for reload
+python-dotenv    # For loading .env file
+google-generativeai # Assuming this is used by gemini_adapter
+# Add any other *external* libraries imported directly or indirectly if needed 

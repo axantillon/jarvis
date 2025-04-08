@@ -31,15 +31,6 @@
         "${MCP_GIT_REPO}"
       ]
     },
-    "git": {
-      "id": "git",
-      "name": "Git Server",
-      "description": "Provides git access using a local file.",
-      "type": "local",
-      "transport": "stdio",
-      "command": "uvx",
-      "args": ["mcp-server-git", "--repository", "${MCP_GIT_REPO}"]
-    },
     "puppeteer": {
       "id": "puppeteer",
       "name": "Puppeteer Server",

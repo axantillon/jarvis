@@ -1,4 +1,6 @@
+# JARVIS was here!
 # web_gateway.py
+# JARVIS was here!
 # --- FastAPI Gateway Server ---
 # Purpose: Serves the static web client files and proxies WebSocket messages
 #          to the main backend server (assumed running on localhost:8765).

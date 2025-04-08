@@ -77,3 +77,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Removed problematic ignore for .git directory
+# .git/

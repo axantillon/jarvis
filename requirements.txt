@@ -5,5 +5,5 @@ websockets
 fastapi
 uvicorn[standard] # Includes standard dependencies like watchfiles for reload
 python-dotenv    # For loading .env file
-google-generativeai # Assuming this is used by gemini_adapter
+google-genai # Use the NEW SDK package name
 # Add any other *external* libraries imported directly or indirectly if needed 

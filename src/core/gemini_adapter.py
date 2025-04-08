@@ -5,6 +5,7 @@
 # Changes:
 # - FINAL FIX 4: Map internal 'tool' role to 'user' role for API history,
 #   as 'function' role is invalid in this context.
+# - Using correct import for the new google-genai SDK.
 
 from google import genai
 from google.genai import types as genai_types

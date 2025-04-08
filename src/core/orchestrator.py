@@ -103,28 +103,28 @@ class ConversationOrchestrator:
         """
         tool_result_message: ChatMessage
         try:
-            print(f"Orchestrator: Executing tool '{tool_intent.tool_name}' with args: {tool_intent.arguments}")
+            print(f"Orchestrator: Executing tool '{tool_intent.tool_name}' with args: {tool_intent.arguments}") # Use original name
             # Ensure mcp_coordinator is ready (it should be if initialized via async with)
             if not self.mcp_coordinator:
                  raise RuntimeError("MCP Coordinator not available.")
 
             result_data = await self.mcp_coordinator.call_tool(
-                qualified_tool_name=tool_intent.tool_name,
+                qualified_tool_name=tool_intent.tool_name, # Use original name
                 arguments=tool_intent.arguments
             )
-            print(f"Orchestrator: Tool '{tool_intent.tool_name}' executed successfully.")
+            print(f"Orchestrator: Tool '{tool_intent.tool_name}' executed successfully.") # Use original name
             tool_result_message = ChatMessage(
                 role='tool',
-                tool_name=tool_intent.tool_name,
+                tool_name=tool_intent.tool_name, # Use original name in history
                 content=None, # Tool results go in 'data'
                 data=result_data # Assuming call_tool returns the JSON-able result
             )
         except Exception as e:
             error_details = traceback.format_exc()
-            print(f"Orchestrator: Error executing tool '{tool_intent.tool_name}': {e}\n{error_details}")
+            print(f"Orchestrator: Error executing tool '{tool_intent.tool_name}': {e}\n{error_details}") # Use original name
             tool_result_message = ChatMessage(
                 role='tool',
-                tool_name=tool_intent.tool_name,
+                tool_name=tool_intent.tool_name, # Use original name in history
                 content=None, # Error details go in 'data'
                 data={ # Structure the error data
                     "error": f"Tool execution failed: {type(e).__name__}",

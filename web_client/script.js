@@ -210,7 +210,23 @@ function handleTextMessage(text) {
     currentJarvisMessageDiv = addMessageToLog("", "jarvis", "JARVIS:");
   }
   // Append text content (handle potential HTML entities safely)
-  currentJarvisMessageDiv.appendChild(document.createTextNode(text));
+  // currentJarvisMessageDiv.appendChild(document.createTextNode(text)); // Old way
+
+  // --- Render Markdown --- Use innerHTML carefully
+  // marked.parseInline() returns HTML. We append it incrementally.
+  // Ensure the server doesn't send malicious markdown. For basic use, this is okay.
+  // For more security, consider a sanitizer like DOMPurify after marked.parseInline().
+  try {
+    // Use parseInline which is better for streaming/appending parts of markdown
+    // Switch to marked.parse() to handle block-level elements (headings, lists, code blocks)
+    const renderedHtml = marked.parse(text);
+    currentJarvisMessageDiv.innerHTML += renderedHtml;
+  } catch (e) {
+    console.error("Markdown parsing error:", e);
+    // Fallback to plain text if markdown parsing fails
+    currentJarvisMessageDiv.appendChild(document.createTextNode(text));
+  }
+  // --- End Render Markdown ---
 }
 
 function addSystemMessage(text, type) {

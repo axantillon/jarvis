@@ -7,10 +7,7 @@
       "type": "local",
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory", "memory.json"],
-      "env": {
-        "MEMORY_FILE_PATH": "memory.json"
-      }
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
     },
     "sequential-thinking": {
       "id": "sequential-thinking",

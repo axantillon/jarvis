@@ -122,7 +122,7 @@ async def websocket_proxy_endpoint(client_ws: WebSocket):
 
 # --- Static File Serving ---
 
-# Serve index.html for the root path
+# Serve index.html for the root path GET requests
 @app.get("/")
 async def get_index():
     index_path = os.path.join(STATIC_DIR, "index.html")
@@ -130,6 +130,20 @@ async def get_index():
         return FileResponse(index_path)
     else:
         return fastapi.Response(content="index.html not found", status_code=404)
+
+# Explicitly handle HEAD requests for the root path (often used by health checks)
+@app.head("/")
+async def head_index():
+    # Simply return an OK response, headers will be added automatically
+    # based on what a GET request would return, which is sufficient for health checks.
+    # Alternatively, return FileResponse(index_path) - it handles HEAD correctly.
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        # FileResponse automatically handles HEAD requests appropriately
+        return FileResponse(index_path)
+    else:
+        # If index.html doesn't exist, return 404 for HEAD too
+        return fastapi.Response(content="", status_code=404)
 
 # Mount the rest of the static files (CSS, JS)
 # Note: Adjust the path if web_client is located elsewhere relative to web_gateway.py

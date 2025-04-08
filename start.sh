@@ -1,6 +1,7 @@
 #!/bin/bash
 # start.sh
 # Script to run both the main backend and the web gateway concurrently
+# Changes: Run gateway in foreground, remove wait/cleanup logic.
 
 echo "Starting main backend server (src/main.py) in background..."
 # Assuming src/main.py runs without arguments and listens on 8765
@@ -16,25 +17,19 @@ echo "Starting web gateway server (web_gateway.py) in foreground..."
 # Ensure web_gateway.py's BACKEND_WS_URI points to ws://localhost:8765 (correct inside container)
 PORT=${PORT:-8000} # Use Render's PORT env var, default to 8000
 # Use --no-access-log for cleaner logs unless debugging needed
-uvicorn web_gateway:app --host 0.0.0.0 --port $PORT --no-access-log &
-GATEWAY_PID=$!
-echo "Web gateway server PID: $GATEWAY_PID"
+# Run uvicorn in the FOREGROUND (removed trailing &)
+uvicorn web_gateway:app --host 0.0.0.0 --port $PORT --no-access-log
 
-# Wait for either process to exit, report which one exited
-wait -n $MAIN_PID $GATEWAY_PID
-EXIT_STATUS=$?
-echo "One of the processes exited with status $EXIT_STATUS"
+# Exit with the status of the gateway process
+GATEWAY_EXIT_STATUS=$?
+echo "Web gateway server exited with status $GATEWAY_EXIT_STATUS"
 
-# Gracefully terminate the other process if it's still running
+# Optionally attempt to gracefully stop the background backend if needed
 if kill -0 $MAIN_PID 2>/dev/null; then
     echo "Terminating main backend server (PID: $MAIN_PID)..."
     kill $MAIN_PID
-    wait $MAIN_PID
-elif kill -0 $GATEWAY_PID 2>/dev/null; then
-    echo "Terminating web gateway server (PID: $GATEWAY_PID)..."
-    kill $GATEWAY_PID
-    wait $GATEWAY_PID
+    wait $MAIN_PID # Wait for it to actually terminate
 fi
 
 echo "Exiting start script."
-exit $EXIT_STATUS 
+exit $GATEWAY_EXIT_STATUS 

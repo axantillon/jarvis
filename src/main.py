@@ -42,7 +42,7 @@ Follow the instructions precisely on how to format tool calls when you need to u
 MCP_CONFIG_PATH = str(project_root / "mcp.json")
 
 # WebSocket Server Configuration
-HOST = "localhost"
+HOST = "0.0.0.0" # Listen on all interfaces for container compatibility
 PORT = 8765 # Default WebSocket port, change if needed
 
 async def main():

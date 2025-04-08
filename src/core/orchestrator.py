@@ -5,10 +5,12 @@
 # - Initial implementation.
 # - Implemented handle_input logic including LLM calls and tool execution flow.
 # - Modified handle_input to accept and pass a user-specific system_prompt.
+# - Added logging for handle_input start/end.
 
 import asyncio
 import traceback
 from typing import Dict, List, AsyncGenerator, Optional, Any, cast
+import logging
 
 # Import components and types from other modules
 from .llm_service import (
@@ -23,6 +25,11 @@ from .llm_service import (
     EndOfTurn
 )
 from .mcp_coordinator import MCPCoordinator, ToolRegistryEntry
+
+# Configure logging
+# Setting level to INFO to capture the new logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class ConversationOrchestrator:
     """
@@ -155,6 +162,7 @@ class ConversationOrchestrator:
         Yields:
             LLMResponsePart objects representing the conversation turn.
         """
+        logger.info(f"Orchestrator ({session_id}): Starting handle_input for text: '{text[:100]}...'")
         current_llm_config = llm_config if llm_config is not None else LLMConfig({})
         session_history = self._get_history(session_id)
 
@@ -245,34 +253,33 @@ class ConversationOrchestrator:
 
                 # If the loop finished *because* of a tool call, restart the outer loop
                 if last_response_part_was_tool_call:
-                    print(f"Orchestrator ({session_id}): Re-prompting LLM after tool call {part.tool_name if isinstance(part, ToolCallIntent) else 'unknown'}.")
+                    logger.info(f"Orchestrator ({session_id}): Re-prompting LLM after tool call {part.tool_name if isinstance(part, ToolCallIntent) else 'unknown'}.")
                     continue # Go back to the start of the 'while True' loop
 
-                # If the loop finished normally (no tool call at the end)
-                else:
-                    # Add any remaining assistant text to history
-                    if assistant_text_buffer:
-                         final_assistant_message = ChatMessage(
-                              role='assistant',
-                              content=assistant_text_buffer,
-                              data=None,
-                              tool_name=None
-                         )
-                         self._add_message(session_id, final_assistant_message)
-                    print(f"Orchestrator ({session_id}): LLM turn finished successfully.")
-                    handled_successfully = True  # Set success flag
-                    break # Exit the 'while True' loop, turn is complete
+                # If the loop finished *without* breaking for a tool call, it means the LLM turn is complete
+                # Add the final assistant text to history
+                if assistant_text_buffer:
+                     assistant_message = ChatMessage(
+                          role='assistant',
+                          content=assistant_text_buffer,
+                          data=None,
+                          tool_name=None
+                     )
+                     self._add_message(session_id, assistant_message)
+                     assistant_text_buffer = "" # Clear buffer just in case
+
+                handled_successfully = True # Mark as successful if we reached the end naturally
+                print(f"Orchestrator ({session_id}): LLM turn finished successfully.")
+                break # Exit the 'while True' loop normally
 
             except Exception as e:
-                error_details = traceback.format_exc()
-                print(f"Orchestrator ({session_id}): Unhandled error during LLM interaction: {e}\n{error_details}")
-                yield ErrorInfo(message=f"Orchestrator error: {e}", details=error_details)
-                # Optionally add system error message?
-                # self._add_message(session_id, ChatMessage(role='system', content=f"Orchestrator Error: {e}", data=None))
-                break # Exit the 'while True' loop on unhandled exception
-
-        # --- ALWAYS yield EndOfTurn at the end, outside the main try block ---
-        # This ensures we ALWAYS signal the end of a turn, regardless of how we got here
-        print(f"Orchestrator ({session_id}): Turn completed, yielding EndOfTurn signal.")
-        yield EndOfTurn()
-        print(f"Orchestrator ({session_id}): EndOfTurn signal yielded. handled_successfully={handled_successfully}")
+                error_trace = traceback.format_exc()
+                logger.error(f"Orchestrator ({session_id}): Unhandled error in handle_input: {e}\n{error_trace}")
+                yield ErrorInfo(message=f"Orchestrator error: {e}", details=error_trace)
+                # Ensure we still break the loop on unhandled errors
+                break
+            finally:
+                # Yield an EndOfTurn signal regardless of how the loop ended (success, error, tool call exit)
+                # The WebSocket handler uses this to know the processing for this input is done.
+                logger.info(f"Orchestrator ({session_id}): Turn completed, yielding EndOfTurn signal. handled_successfully={handled_successfully}")
+                yield EndOfTurn()

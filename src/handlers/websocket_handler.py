@@ -8,12 +8,14 @@
 # - Stores user-specific system prompts per session.
 # - Passes user-specific system prompt to the orchestrator.
 # - Updated authentication to use email/password with bcrypt.
+# - Added logging for message receipt and response sending.
 
 import asyncio
 import json
 import uuid
 import traceback
 from typing import Dict, Set, Optional
+import logging
 
 # Use 'websockets' library for handling WebSocket connections
 # pip install websockets
@@ -37,6 +39,10 @@ from src.core.llm_service import (
 
 # Define a structure to hold authenticated session data
 from dataclasses import dataclass
+
+# Configure logging (ensure it's configured, possibly redundant if done elsewhere)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 @dataclass
 class AuthenticatedSession:
@@ -220,12 +226,12 @@ class WebSocketHandler:
                 return # Stop processing for this connection
 
             # --- Main message loop (only if authenticated) ---
-            print(f"Handler ({session_id}): Authentication successful, entering message loop.")
+            logger.info(f"Handler ({session_id}, {user_session.email}): Authentication successful, entering message loop.")
             async for message_str in websocket:
-                print(f"Handler ({session_id}): Received message: {message_str[:100]}...") # Log truncated message
+                logger.info(f"Handler ({session_id}, {user_session.email}): Received message: '{message_str[:100]}...'") # Log full message received
                 # Ensure user_session is available (should always be true if authenticated)
                 if not user_session:
-                     print(f"Handler ({session_id}): CRITICAL - Missing user session data despite authentication. Closing.")
+                     logger.critical(f"Handler ({session_id}): CRITICAL - Missing user session data despite authentication. Closing.")
                      await websocket.close(code=1011, reason="Internal Server Error") # 1011 = Internal Error
                      break
 
@@ -236,11 +242,13 @@ class WebSocketHandler:
 
                     if msg_type == "message" and payload and "text" in payload:
                         user_text = payload["text"]
-                        print(f"Handler ({session_id}, {user_session.email}): Processing user text: {user_text[:100]}...")
+                        logger.info(f"Handler ({session_id}, {user_session.email}): Processing user text: '{user_text[:100]}...'")
 
                         # TODO: Allow passing LLMConfig from client if needed
                         llm_config = LLMConfig({}) # Empty config for now
 
+                        # Track the full response text being sent
+                        full_response_text = ""
                         # Call the orchestrator and stream results back
                         # Pass the user-specific system prompt from the authenticated session
                         async for part in self.orchestrator.handle_input(
@@ -249,43 +257,52 @@ class WebSocketHandler:
                             llm_config=llm_config,
                             system_prompt=user_session.system_prompt # Pass user-specific prompt
                         ):
-                            formatted_payload = self._format_response_part(part)
-                            if formatted_payload:
-                                await websocket.send(json.dumps(formatted_payload))
+                            # Format and send the part to the client
+                            response_payload = self._format_response_part(part)
+                            if response_payload:
+                                # Log the chunk being sent
+                                # logger.debug(f"Handler ({session_id}, {user_session.email}): Sending part: {response_payload}")
+                                # Accumulate text chunks for final log
+                                if response_payload.get("type") == "text":
+                                    full_response_text += response_payload.get("payload", {}).get("content", "")
+                                
+                                await websocket.send(json.dumps(response_payload))
+                        
+                        # Log the complete response text after the stream ends
+                        logger.info(f"Handler ({session_id}, {user_session.email}): Finished streaming response. Full text: '{full_response_text[:200]}...'")
 
-                    # Add handlers for other message types (e.g., heartbeat ping/pong) if needed
-                    elif msg_type == "ping":
-                         await websocket.send(json.dumps({"type": "pong"}))
+                    # Handle other message types if needed (e.g., config changes)
                     else:
-                        print(f"Handler ({session_id}): Received unknown message type or format: {message}")
+                        logger.warning(f"Handler ({session_id}, {user_session.email}): Received unknown/unsupported message type: {msg_type}")
+                
+                except json.JSONDecodeError:
+                    logger.error(f"Handler ({session_id}, {user_session.email}): Received invalid JSON: {message_str[:100]}...")
+                    # Optionally send an error back to the client
+                    # await websocket.send(json.dumps({"type": "error", "payload": {"message": "Invalid JSON received"}}))
+                except Exception as e:
+                    # Catch potential errors during message processing or streaming
+                    error_trace = traceback.format_exc()
+                    logger.error(f"Handler ({session_id}, {user_session.email}): Error handling message: {e}\n{error_trace}")
+                    # Send a generic error to the client
+                    try:
                         await websocket.send(json.dumps({
                             "type": "error",
-                            "payload": {"message": "Unknown message type or format."}
+                            "payload": {"message": f"An internal server error occurred: {e}", "details": error_trace}
                         }))
-
-                except json.JSONDecodeError:
-                    print(f"Handler ({session_id}): Received invalid JSON.")
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "payload": {"message": "Invalid JSON received."}
-                    }))
-                except Exception as e:
-                    # Catch errors during message processing or orchestration
-                    error_details = traceback.format_exc()
-                    print(f"Handler ({session_id}): Error processing message: {e}\n{error_details}")
-                    await websocket.send(json.dumps({
-                        "type": "error",
-                        "payload": {"message": f"Server error: {e}", "details": error_details}
-                    }))
-                    # Depending on severity, we might break the loop or continue
+                    except (ConnectionClosedOK, ConnectionClosedError):
+                        # Connection might already be closed
+                        pass
+                    # Consider whether to break the loop or continue after an error
+                    # break
 
         except (ConnectionClosedOK, ConnectionClosedError) as e:
-            print(f"Handler ({session_id}): Connection closed ({type(e).__name__}).")
+            logger.info(f"Handler ({session_id}): Connection closed ({type(e).__name__}).")
         except Exception as e:
-            # Catch errors related to the connection itself
-            print(f"Handler ({session_id}): Unhandled connection error: {e}")
-            traceback.print_exc()
+            # Catch unexpected errors during the initial connection or auth phase
+            error_trace = traceback.format_exc()
+            logger.error(f"Handler ({session_id}): Unhandled exception in connection handler: {e}\n{error_trace}")
         finally:
+            # Ensure connection is always unregistered
             await self._unregister_connection(websocket)
 
     async def start_server(self, host: str, port: int):

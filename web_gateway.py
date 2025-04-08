@@ -15,6 +15,7 @@ from starlette.responses import FileResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 import logging
 import os
+import time # Import time for timeout calculation
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -85,16 +86,59 @@ async def websocket_proxy_endpoint(client_ws: WebSocket):
     await client_ws.accept()
     logger.info(f"Client connected: {client_ws.client}")
     backend_ws = None
-    try:
-        # --- ADD DELAY --- Give backend time to start
-        await asyncio.sleep(5) # Wait 5 seconds before trying to connect
-        logger.info("Delay complete, attempting backend connection...")
-        # --- END DELAY ---
+    connect_attempts = 0
+    max_attempts = 10 # Try up to 10 times
+    initial_delay = 1.0 # Start with 1 second
+    max_delay = 10.0 # Don't wait more than 10 seconds between retries
+    timeout_seconds = 60 # Total time allowed for connection attempts
+    start_time = time.monotonic()
 
-        # Establish connection to the backend server
-        logger.info(f"Connecting to backend: {BACKEND_WS_URI}")
-        backend_ws = await websockets.connect(BACKEND_WS_URI)
-        logger.info("Connected to backend.")
+    try:
+        # --- REMOVE OLD DELAY ---
+        # await asyncio.sleep(15) # Wait 15 seconds before trying to connect
+        # logger.info("Delay complete, attempting backend connection...")
+        # --- END REMOVE OLD DELAY ---
+
+        # --- ADD RETRY LOOP ---
+        while True:
+            current_time = time.monotonic()
+            if current_time - start_time > timeout_seconds:
+                 logger.error(f"Backend connection timed out after {timeout_seconds} seconds.")
+                 raise websockets.exceptions.WebSocketException("Backend connection timeout")
+
+            connect_attempts += 1
+            logger.info(f"Attempting to connect to backend: {BACKEND_WS_URI} (Attempt {connect_attempts}/{max_attempts})")
+            try:
+                backend_ws = await websockets.connect(BACKEND_WS_URI)
+                logger.info("Connected to backend successfully.")
+                break # Exit loop on successful connection
+            except (OSError, websockets.exceptions.WebSocketException) as e:
+                 # Specific check for Connection Refused or similar OS errors
+                 if isinstance(e, ConnectionRefusedError) or "connection refused" in str(e).lower():
+                     logger.warning(f"Backend connection attempt {connect_attempts} failed: Connection refused. Retrying...")
+                 # Handle other WebSocket connection exceptions (e.g., invalid handshake)
+                 elif isinstance(e, websockets.exceptions.WebSocketException):
+                      logger.warning(f"Backend connection attempt {connect_attempts} failed: {e}. Retrying...")
+                 # Handle other potential OS errors during connection
+                 elif isinstance(e, OSError):
+                      logger.warning(f"Backend connection attempt {connect_attempts} failed with OS Error: {e}. Retrying...")
+                 else:
+                      raise # Re-raise unexpected errors
+
+                 if connect_attempts >= max_attempts:
+                     logger.error(f"Failed to connect to backend after {max_attempts} attempts.")
+                     raise e # Re-raise the last caught exception
+
+                 # Calculate next delay with exponential backoff
+                 delay = min(initial_delay * (2 ** (connect_attempts - 1)), max_delay)
+                 logger.info(f"Waiting {delay:.2f} seconds before next retry...")
+                 await asyncio.sleep(delay)
+        # --- END RETRY LOOP ---
+
+        # Establish connection to the backend server (Now happens inside the loop)
+        # logger.info(f"Connecting to backend: {BACKEND_WS_URI}")
+        # backend_ws = await websockets.connect(BACKEND_WS_URI)
+        # logger.info("Connected to backend.")
 
         # Run forwarding tasks concurrently
         client_to_backend_task = asyncio.create_task(

@@ -165,6 +165,17 @@ class WebSocketHandler:
 
     async def start_server(self, host: str, port: int):
         """Starts the WebSocket server."""
-        print(f"Starting WebSocket server on ws://{host}:{port}...")
-        async with websockets.serve(self.handle_connection, host, port):
-            await asyncio.Future() # Run forever
+        # Note: Binding to 0.0.0.0 means listen on all interfaces
+        # Clients connect using the actual IP or hostname
+        effective_host = host if host != "0.0.0.0" else "<all interfaces>"
+        print(f"Attempting to start WebSocket server on ws://{effective_host}:{port}...")
+        try:
+            async with websockets.serve(self.handle_connection, host, port) as server:
+                # Log after the server is successfully started and listening
+                actual_host, actual_port = server.sockets[0].getsockname()[:2]
+                print(f"*** WebSocket server successfully started and listening on ws://{actual_host}:{actual_port} ***")
+                await asyncio.Future() # Run forever until cancelled
+        except OSError as e:
+             print(f"!!! FAILED to start WebSocket server on ws://{effective_host}:{port} - {e} !!!")
+             # Re-raise the exception so the main application knows it failed
+             raise

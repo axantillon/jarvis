@@ -86,6 +86,11 @@ async def websocket_proxy_endpoint(client_ws: WebSocket):
     logger.info(f"Client connected: {client_ws.client}")
     backend_ws = None
     try:
+        # --- ADD DELAY --- Give backend time to start
+        await asyncio.sleep(5) # Wait 5 seconds before trying to connect
+        logger.info("Delay complete, attempting backend connection...")
+        # --- END DELAY ---
+
         # Establish connection to the backend server
         logger.info(f"Connecting to backend: {BACKEND_WS_URI}")
         backend_ws = await websockets.connect(BACKEND_WS_URI)

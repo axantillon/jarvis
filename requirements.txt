@@ -7,4 +7,5 @@ uvicorn[standard] # Includes standard dependencies like watchfiles for reload
 python-dotenv    # For loading .env file
 google-genai # Use the NEW SDK package name
 google-api-core # Core library needed by google-genai
+mcp[cli]>=1.6.0 # MCP library dependency
 # Add any other *external* libraries imported directly or indirectly if needed 

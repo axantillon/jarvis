@@ -1,6 +1,7 @@
 # Dockerfile
 # Build environment for the laserfocus-host application
 # Includes both the main backend and the web gateway
+# Added COPY instruction for memory.json
 
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
@@ -62,6 +63,7 @@ COPY web_gateway.py .
 COPY start.sh .
 COPY mcp.json .
 COPY system_prompt.txt .
+COPY memory.json .
 
 # Ensure the app directory is owned by a non-root user if needed,
 # but for simplicity now, just ensure permissions.

@@ -8,9 +8,26 @@
 
 // Determine WebSocket protocol (ws/wss) based on page protocol (http/https)
 const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-// Construct WebSocket URI relative to the current host
-// const wsUri = `${wsProtocol}//${window.location.host}/ws`; // Use relative path
-const wsUri = `ws://localhost:8765`; // Removed hardcoded path
+let wsHost = window.location.host; // Default to the host the page was loaded from
+
+// --- Example: Explicit check for local development ---
+// If you KNOW your local gateway runs on a different port (e.g., 8000)
+// and your dev server runs on another (e.g., 8080), you might do this:
+if (
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+) {
+  // Option 1: Assume gateway is on a specific port locally
+  // wsHost = "localhost:8000"; // Or whatever your local gateway port is
+  // Option 2: Keep using relative if your dev server proxies /ws correctly (RECOMMENDED)
+  console.log("Local development detected, using relative host:", wsHost);
+} else {
+  console.log("Production environment detected, using relative host:", wsHost);
+}
+
+const wsUri = `${wsProtocol}//${wsHost}/ws`;
+
+console.log("WebSocket URI configured to:", wsUri); // Add log for debugging
 
 const messageInput = document.getElementById("messageInput");
 const sendButton = document.getElementById("sendButton");

@@ -77,5 +77,5 @@ RUN chmod +x ./start.sh
 # Defaulting to 8000 if PORT isn't set in start.sh
 EXPOSE 8000
 
-# Command to run the application using the startup script
-CMD ["./start.sh"] 
+# Command to run verification then the application using the startup script
+CMD bash -c "echo '--- Verifying memory file ---' && ls -la /app/memory.json && echo '--- Checking memory file content ---' && head -n 10 /app/memory.json || echo '!!! memory.json not found or empty !!!' && echo '--- Verification complete ---' && exec ./start.sh" 

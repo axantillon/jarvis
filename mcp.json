@@ -7,7 +7,7 @@
       "type": "local",
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "args": ["-y", "@modelcontextprotocol/server-memory", "memory.json"],
       "env": {
         "MEMORY_FILE_PATH": "memory.json"
       }

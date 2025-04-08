@@ -45,6 +45,7 @@ body {
 .message.user {
   color: #9cdcfe; /* Light blue for user */
   align-self: flex-start; /* Align user messages to left */
+  overflow-x: auto; /* Add scroll as fallback if wrapping fails */
 }
 
 .message.jarvis {
@@ -181,3 +182,41 @@ body {
 /* --- REMOVE ALL #loginForm styles --- */
 
 /* End Login Form Styles */
+
+/* --- Mobile Responsiveness --- */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px; /* Slightly smaller font on mobile */
+  }
+
+  #chatbox {
+    width: 100%; /* Full width */
+    max-width: none; /* Remove max-width limit */
+    height: 95vh; /* Use more vertical space */
+    border-radius: 0; /* Optional: remove border radius for edge-to-edge feel */
+    border: none; /* Optional: remove border */
+    padding: 5px; /* Reduce padding slightly */
+  }
+
+  #messages {
+    padding: 10px; /* Adjust padding within messages area */
+  }
+
+  .message.jarvis {
+    margin-left: 10px; /* Reduce Jarvis indent */
+  }
+
+  .input-area {
+    padding: 8px; /* Adjust input area padding */
+  }
+
+  #messageInput {
+    padding: 6px;
+  }
+
+  #sendButton {
+    padding: 6px 10px;
+  }
+}
+
+/* End Mobile Responsiveness */

@@ -25,11 +25,7 @@
       "type": "local",
       "transport": "stdio",
       "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/Users/axantillon/Downloads"
-      ]
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/app/data"]
     },
     "git": {
       "id": "git",

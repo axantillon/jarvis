@@ -128,18 +128,35 @@ async def websocket_proxy_endpoint(client_ws: WebSocket):
 
 
 # --- Static File Serving ---
-# Mount static files. StaticFiles with html=True handles GET/HEAD for index.html at the root.
-if os.path.exists(STATIC_DIR):
-    # Check if index.html exists for logging purposes
-    index_path = os.path.join(STATIC_DIR, "index.html")
-    if not os.path.exists(index_path):
-        logger.warning(f"index.html not found in {STATIC_DIR}. Root path / will not work.")
+# Reverted to explicit GET/HEAD handlers for /, plus StaticFiles mount
 
-    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
-    logger.info(f"Serving static files from: {STATIC_DIR} (html=True)")
+# Serve index.html for the root path GET requests
+@app.get("/")
+async def get_index():
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    else:
+        return fastapi.Response(content="index.html not found", status_code=404)
+
+# Explicitly handle HEAD requests for the root path (often used by health checks)
+@app.head("/")
+async def head_index():
+    index_path = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_path):
+        # FileResponse automatically handles HEAD requests appropriately
+        return FileResponse(index_path)
+    else:
+        # If index.html doesn't exist, return 404 for HEAD too
+        return fastapi.Response(content="", status_code=404)
+
+# Mount the rest of the static files (CSS, JS) - MUST come AFTER explicit routes
+if os.path.exists(STATIC_DIR):
+    app.mount("/", StaticFiles(directory=STATIC_DIR), name="static")
+    logger.info(f"Serving static files from: {STATIC_DIR}")
 else:
-    logger.error(f"Static directory not found at: {STATIC_DIR}")
-    logger.error("Static file serving will not work.")
+     logger.error(f"Static directory not found at: {STATIC_DIR}")
+     logger.error("Static file serving will not work.")
 
 
 # --- Main Execution (for running with uvicorn) ---

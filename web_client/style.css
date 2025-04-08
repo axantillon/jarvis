@@ -1,0 +1,159 @@
+/* web_client/style.css */
+/* Basic styling for the web CLI client */
+body {
+  font-family: monospace;
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+  margin: 0;
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+}
+
+#chatbox {
+  width: 80%;
+  max-width: 800px;
+  height: 80vh;
+  border: 1px solid #555;
+  background-color: #252526;
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px;
+  overflow: hidden; /* Prevents content spill */
+}
+
+#messages {
+  flex-grow: 1;
+  overflow-y: auto;
+  padding: 15px;
+  border-bottom: 1px solid #555;
+  display: flex;
+  flex-direction: column; /* Ensure messages stack vertically */
+}
+
+.message {
+  margin-bottom: 10px;
+  white-space: pre-wrap; /* Preserve whitespace and wrap lines */
+  word-wrap: break-word; /* Break long words */
+}
+
+.message.user {
+  color: #9cdcfe; /* Light blue for user */
+  align-self: flex-start; /* Align user messages to left */
+}
+
+.message.jarvis {
+  color: #4ec9b0; /* Teal for Jarvis */
+  align-self: flex-start; /* Align Jarvis messages to left */
+  margin-left: 20px; /* Indent Jarvis messages */
+}
+.message.jarvis .sender {
+  font-weight: bold;
+  display: block; /* Ensure sender is on its own line */
+  margin-bottom: 3px;
+}
+
+.message.status {
+  color: #ffd700; /* Yellow for status */
+  font-style: italic;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  align-self: center; /* Center status messages */
+  text-align: center;
+  width: 100%;
+}
+.message.status .tool {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+}
+
+.message.error {
+  color: #f44747; /* Red for errors */
+  font-weight: bold;
+  margin-top: 10px;
+  margin-bottom: 10px;
+  align-self: center; /* Center error messages */
+  text-align: center;
+  width: 100%;
+}
+
+.message.connection {
+  color: #4caf50; /* Green for connection */
+  font-weight: bold;
+  margin-bottom: 15px;
+  align-self: center; /* Center connection messages */
+  text-align: center;
+  width: 100%;
+}
+
+#input-area {
+  display: flex;
+  padding: 10px;
+  background-color: #333333;
+  align-items: center; /* Vertically align items */
+}
+
+#prompt {
+  font-weight: bold;
+  margin-right: 5px;
+  white-space: nowrap; /* Prevent prompt from wrapping */
+}
+.prompt-ready {
+  color: #4caf50;
+} /* Green when ready */
+.prompt-processing {
+  color: #ffd700;
+} /* Yellow when processing */
+.prompt-disconnected {
+  color: #f44747;
+} /* Red when disconnected */
+
+#messageInput {
+  flex-grow: 1;
+  padding: 8px;
+  border: 1px solid #555;
+  background-color: #3c3c3c;
+  color: #d4d4d4;
+  border-radius: 3px;
+  margin-right: 10px;
+}
+
+#messageInput:disabled {
+  background-color: #4a4a4a;
+  cursor: not-allowed;
+}
+
+#sendButton {
+  padding: 8px 15px;
+  border: none;
+  background-color: #007acc;
+  color: white;
+  cursor: pointer;
+  border-radius: 3px;
+  white-space: nowrap; /* Prevent button text wrapping */
+}
+
+#sendButton:disabled {
+  background-color: #5a5a5a;
+  cursor: not-allowed;
+}
+
+#sendButton:hover:not(:disabled) {
+  background-color: #005a9e;
+}
+
+#status-indicator {
+  padding: 5px 10px;
+  background-color: rgba(255, 215, 0, 0.1); /* Light yellow background */
+  color: #ffd700;
+  font-size: 0.9em;
+  text-align: center;
+  border-top: 1px solid #555; /* Separator */
+}
+
+.status-hidden {
+  display: none;
+}

@@ -37,8 +37,13 @@
       "description": "Provides git access using a local file.",
       "type": "local",
       "transport": "stdio",
-      "command": "python",
-      "args": ["-m", "mcp.server.git", "--repository", "${MCP_GIT_REPO}"]
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-git",
+        "--repository",
+        "${MCP_GIT_REPO}"
+      ]
     },
     "puppeteer": {
       "id": "puppeteer",

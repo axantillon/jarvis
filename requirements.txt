@@ -5,7 +5,7 @@ websockets==12.0
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
 python-dotenv==1.0.1
-google-genai==0.7.1 # Example version, check yours
+google-genai==1.9.0 # Updated to a valid version - PLEASE VERIFY this matches your local env
 google-api-core==2.19.0 # Example version, check yours
 mcp[cli]>=1.6.0 # Keep this range or pin specific MCP version
 bcrypt==4.1.3 # Added bcrypt

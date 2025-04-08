@@ -18,13 +18,28 @@ WORKDIR /app
 # Install system dependencies (including Node.js for MCP tools using npx)
 # Update apt, install curl & gnupg, add NodeSource repo, install Node.js 20.x, git, chromium, clean up
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl gnupg ca-certificates git chromium && \
+    apt-get install -y --no-install-recommends \
+    # Base tools
+    curl gnupg ca-certificates git \
+    # Node.js
+    nodejs \
+    # Chromium Browser
+    chromium \
+    # Puppeteer/Chromium dependencies (Commonly needed)
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 \
+    libasound2 libgtk-3-0 libx11-xcb1 libxss1 libxrandr2 libxcomposite1 \
+    libxcursor1 libxdamage1 libxi6 libxtst6 \
+    # Font dependencies (sometimes needed for rendering)
+    fonts-liberation \
+    && \
+    # Node.js setup (moved after initial installs)
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
     NODE_MAJOR=20 && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
-    apt-get install nodejs -y && \
+    # Install specific Node.js version if the default 'nodejs' isn't sufficient (usually it is)
+    # apt-get install nodejs -y && \
     # Clean up apt cache to reduce image size
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*

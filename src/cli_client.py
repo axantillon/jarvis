@@ -21,6 +21,10 @@ from rich.console import Console
 from rich.text import Text
 from rich.status import Status
 from typing import Optional
+import logging
+
+# Setup basic logging for the client
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Server configuration
 SERVER_HOST = "localhost"
@@ -96,8 +100,24 @@ async def receive_websocket_messages(websocket):
             msg_type = message.get("type")
             payload = message.get("payload", {})
 
-            # --- Process message types (largely unchanged) ---
-            if msg_type == "text":
+            # --- Added handling for identify_success/fail ---
+            if msg_type == "identify_success":
+                 # Already printed "Connected! Identifying..." - maybe log?
+                 logging.info(f"CLIENT: Identification successful. Session ID: {payload.get('sessionId')}")
+                 # Print initial prompt *after* successful identification
+                 console.print()
+                 console.print(Text(">>> ", style="bold green"), end="")
+                 continue # Don't process further as regular message
+            elif msg_type == "identify_fail":
+                 if currently_speaking: console.print(); currently_speaking = False
+                 reason = payload.get("message", "Unknown reason.")
+                 console.print(f"\nIdentification Failed: {reason}", style="bold red")
+                 exit_flag.set() # Signal exit
+                 await websocket.close() # Close connection
+                 break # Exit receive loop
+            # --- End identify handling ---
+
+            elif msg_type == "text":
                 if not currently_speaking:
                     console.print()
                     console.print(Text("JARVIS:", style="bold cyan"))
@@ -129,20 +149,40 @@ async def receive_websocket_messages(websocket):
                 console.print(Text(">>> ", style="bold green"), end="") # Print prompt after JARVIS response
 
     # --- Exception Handling (ensure timer/status stopped) ---
-    except websockets.exceptions.ConnectionClosed:
+    except websockets.exceptions.ConnectionClosedOK:
         if indicator_timer_task: indicator_timer_task.cancel()
         if processing_status: processing_status.stop()
-        console.print("\nConnection closed by server.", style="bold red")
+        # Don't print "Connection closed by server" if we already got identify_fail
+        if not exit_flag.is_set():
+             console.print("\nConnection closed.", style="bold yellow") # More generic close message
         exit_flag.set()
+    except websockets.exceptions.ConnectionClosedError as e:
+         if indicator_timer_task: indicator_timer_task.cancel()
+         if processing_status: processing_status.stop()
+         console.print(f"\nConnection closed with error: {e}", style="bold red")
+         exit_flag.set()
     except json.JSONDecodeError:
         if indicator_timer_task: indicator_timer_task.cancel()
         if processing_status: processing_status.stop()
         console.print("\nReceived invalid JSON from server.", style="bold red")
+        exit_flag.set()
     except Exception as e:
         if indicator_timer_task: indicator_timer_task.cancel()
         if processing_status: processing_status.stop()
         console.print(f"\nError receiving messages: {e}", style="bold red")
         exit_flag.set()
+
+async def send_identification(websocket, email):
+    """Sends the identification message (type: identify) to the server."""
+    identification_message = {
+        "type": "identify", # <--- Changed type to identify
+        "email": email
+        # No password needed
+    }
+    message_str = json.dumps(identification_message)
+    logging.info(f"CLIENT: Sending identification JSON: {message_str}")
+    await websocket.send(message_str)
+    print(f"Sent identification for {email}.") # Keep this print
 
 # --- Main Application Logic ---
 async def main():
@@ -163,14 +203,10 @@ async def main():
         async with websockets.connect(SERVER_URI) as websocket:
             console.print("Connected! Identifying...", style="bold green")
 
-            # Send the identify message
-            identify_message = {"type": "identify", "email": user_email}
-            await websocket.send(json.dumps(identify_message))
-            console.print(f"Sent identification for {user_email}.", style="green")
+            # Send the identify message (no password)
+            await send_identification(websocket, user_email)
 
-            # Print the initial prompt HERE, after identification is sent
-            console.print() # Add a newline for spacing
-            console.print(Text(">>> ", style="bold green"), end="")
+            # REMOVED: Initial prompt is now printed by receiver on identify_success
 
             input_thread = threading.Thread(target=input_thread_function)
             input_thread.daemon = True

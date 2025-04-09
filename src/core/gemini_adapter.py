@@ -6,6 +6,7 @@
 # - FINAL FIX 4: Map internal 'tool' role to 'user' role for API history,
 #   as 'function' role is invalid in this context.
 # - Using correct import for the new google-genai SDK.
+# - Refactored logging: Added logger, replaced print with logger calls.
 
 from google import genai
 from google.genai import types as genai_types
@@ -13,6 +14,7 @@ from google.api_core import exceptions as google_exceptions
 import traceback
 import json
 import asyncio
+import logging # <-- Add logging import
 from typing import (
     Any,
     AsyncGenerator,
@@ -41,6 +43,7 @@ DEFAULT_SAFETY_SETTINGS_DICT = {
 
 # Sentinel object to signal the end of the sync generator
 _SENTINEL = object()
+logger = logging.getLogger(__name__) # <-- Add logger definition
 
 class GeminiAdapter(LLMAdapter):
     """
@@ -63,10 +66,13 @@ class GeminiAdapter(LLMAdapter):
         self._default_safety_settings_dict = default_safety_settings if default_safety_settings is not None else DEFAULT_SAFETY_SETTINGS_DICT
 
         try:
+            # Mask API Key for logging if needed (simple example)
+            api_key_display = f"{api_key[:4]}...{api_key[-4:]}" if api_key and len(api_key) > 8 else "******"
+            logger.info(f"Initializing google-genai Client (API Key: {api_key_display}, Model: {self._default_model_name})...") # Use logger.info
             self._client = genai.Client(api_key=api_key)
-            print(f"google-genai Client initialized successfully (using model default: {self._default_model_name}).")
+            logger.info("google-genai Client initialized successfully.") # Use logger.info
         except Exception as e:
-             print(f"Error initializing google-genai Client: {e}")
+             logger.critical(f"Error initializing google-genai Client: {e}", exc_info=True) # Use logger.critical
              raise RuntimeError(f"Failed to initialize google-genai Client: {e}") from e
 
     def _format_contents_for_gemini(
@@ -80,6 +86,7 @@ class GeminiAdapter(LLMAdapter):
         Maps internal 'tool' role messages to 'user' role for API compatibility.
         """
         contents: List[genai_types.ContentDict] = []
+        logger.debug("Formatting history for Gemini API...") # Use logger.debug
 
         if system_prompt and system_prompt.strip():
             contents.append(genai_types.ContentDict(role="user", parts=[genai_types.PartDict(text=system_prompt)]))
@@ -87,7 +94,7 @@ class GeminiAdapter(LLMAdapter):
 
         last_role = "model" if contents else None
 
-        for message in history:
+        for i, message in enumerate(history):
             role = message['role']
             content = message.get('content')
             data = message.get('data')
@@ -105,7 +112,6 @@ class GeminiAdapter(LLMAdapter):
                  if content is not None and isinstance(content, str):
                       parts.append(genai_types.PartDict(text=content))
             elif role == 'tool':
-                 # Map 'tool' role to 'user' role and format the data clearly
                  mapped_role = 'user'
                  if data is not None:
                       if isinstance(data, str): part_content = data
@@ -115,30 +121,26 @@ class GeminiAdapter(LLMAdapter):
                       # Add context that this is a tool result
                       tool_context = f"Result for tool '{tool_name}':\n" if tool_name else "Tool Result:\n"
                       parts.append(genai_types.PartDict(text=f"{tool_context}{part_content}"))
+                 else:
+                     logger.warning(f"History item {i} has role 'tool' but no data.") # Use logger.warning
             else:
-                continue # Skip other roles
+                logger.warning(f"Skipping history item {i} with unhandled role: {role}") # Use logger.warning
+                continue
 
             if not parts or not mapped_role:
-                 continue # Skip if no parts generated or role couldn't be mapped
+                 logger.debug(f"Skipping history item {i}: No parts generated or role not mapped (Role: {role}).") # Use logger.debug
+                 continue
 
-            # Prevent adding consecutive identical roles if possible
             if mapped_role == last_role:
-                 # If consecutive user messages, merge parts? Or skip? For now, append.
-                 if mapped_role == 'user' and contents:
-                     print(f"Warning: Appending consecutive 'user' role messages.")
-                     # Option: Merge parts into previous user message if possible
-                     # contents[-1]['parts'].extend(parts) # Simple merge (might break structure)
-                     # Continue with appending for now:
-                     contents.append(genai_types.ContentDict(role=mapped_role, parts=parts))
-                     last_role = mapped_role
-                 else:
-                     # Avoid other consecutive roles like model/model
-                      print(f"Warning: Skipping message to avoid consecutive roles: Role='{mapped_role}'")
-                      continue
+                 logger.warning(f"Appending consecutive '{mapped_role}' role messages at history index {i}.") # Use logger.warning
+                 # Append anyway for now, Gemini might handle it.
+                 contents.append(genai_types.ContentDict(role=mapped_role, parts=parts))
+                 last_role = mapped_role
             else:
                  contents.append(genai_types.ContentDict(role=mapped_role, parts=parts))
                  last_role = mapped_role
 
+        logger.debug(f"Formatted {len(contents)} content items for Gemini API.") # Use logger.debug
         return contents
 
     # Helper function to safely get next item or sentinel
@@ -149,7 +151,7 @@ class GeminiAdapter(LLMAdapter):
         except StopIteration:
             return _SENTINEL
         except Exception as e:
-             print(f"Error during sync generator next() call: {e}")
+             logger.error(f"Error during sync generator next() call: {e}", exc_info=True) # Use logger.error
              raise
 
     async def _iterate_sync_generator_async(self, sync_generator: Generator) -> AsyncGenerator[Any, None]:
@@ -162,7 +164,7 @@ class GeminiAdapter(LLMAdapter):
                 if next_item is _SENTINEL: break
                 else: yield next_item
             except Exception as e:
-                print(f"Error iterating sync generator in executor: {e}")
+                logger.error(f"Error iterating sync generator in executor: {e}", exc_info=True) # Use logger.error
                 raise
 
     async def stream_generate(
@@ -175,6 +177,7 @@ class GeminiAdapter(LLMAdapter):
         NOTE: Calls generate_content_stream with ONLY model and contents arguments.
         """
         if not self._client:
+             logger.critical("generate_content_stream called but google-genai Client not initialized.") # Use logger.critical
              raise RuntimeError("google-genai Client not initialized.")
 
         try:
@@ -183,7 +186,7 @@ class GeminiAdapter(LLMAdapter):
             formatted_contents = self._format_contents_for_gemini(system_prompt_text, history)
 
             if not formatted_contents:
-                 print("Warning: formatted_contents list is empty after processing history/prompt. Skipping API call.")
+                 logger.warning("Formatted contents list is empty after processing history/prompt. Skipping API call.") # Use logger.warning
                  return
 
             model_name_to_use = config.get('model_name', self._default_model_name)
@@ -197,12 +200,19 @@ class GeminiAdapter(LLMAdapter):
                 "contents": formatted_contents,
             }
 
-            print(f"Calling generate_content_stream (sync) with args: {list(request_args.keys())}")
-            # print(f"Contents being sent:\n{json.dumps(formatted_contents, indent=2)}") # Debug
+            logger.info(f"Calling generate_content_stream with model: {model_name_for_api}") # Use logger.info
+            # Log contents at DEBUG level, potentially large
+            if logger.isEnabledFor(logging.DEBUG):
+                 try:
+                     contents_json = json.dumps(formatted_contents, indent=2)
+                     logger.debug(f"Contents being sent to Gemini API:\n{contents_json}")
+                 except Exception:
+                     logger.debug(f"Contents being sent (could not JSON dump):\n{formatted_contents}")
 
             sync_response_iterator = self._client.models.generate_content_stream(**request_args)
 
             async for chunk in self._iterate_sync_generator_async(sync_response_iterator):
+                 logger.debug(f"Adapter received raw chunk: {chunk}") # Use logger.debug (verbose)
                  try:
                       if hasattr(chunk, 'text') and chunk.text:
                            yield chunk.text
@@ -210,24 +220,22 @@ class GeminiAdapter(LLMAdapter):
                            chunk_text = "".join(part.text for part in chunk.parts if hasattr(part, 'text'))
                            if chunk_text:
                                 yield chunk_text
-                 except ValueError:
-                       print(f"Warning: Skipping chunk due to ValueError (likely blocked content).")
+                 except ValueError as e: # Often indicates safety block
+                       logger.warning(f"Skipping chunk due to ValueError (likely blocked content): {e}") # Use logger.warning
                        continue
-                 except AttributeError:
-                      print(f"Warning: Skipping chunk due to AttributeError (unexpected structure): {chunk}")
+                 except AttributeError as e:
+                      logger.warning(f"Skipping chunk due to AttributeError (unexpected structure): {chunk}. Error: {e}") # Use logger.warning
                       continue
 
         except google_exceptions.GoogleAPIError as e:
-            print(f"Gemini API Error ({type(e).__name__}): {e}")
-            print(f"Request model: {request_args.get('model')}")
-            print(f"Request contents length: {len(request_args.get('contents', []))}")
-            # print roles only: print(f"Request contents roles: {[c.get('role') for c in request_args.get('contents', [])]}")
-
+            logger.error(f"Gemini API Error ({type(e).__name__}): {e}", exc_info=True) # Use logger.error
+            logger.debug(f"Request model: {request_args.get('model')}") # Use logger.debug
+            logger.debug(f"Request contents roles: {[c.get('role') for c in request_args.get('contents', [])]}") # Use logger.debug
             if isinstance(e, google_exceptions.PermissionDenied):
-                 print("Error: Check your API key and permissions.")
+                 logger.error("Error suggests API key or permissions issue.") # Use logger.error
             elif isinstance(e, google_exceptions.InvalidArgument):
-                 print(f"Error: Invalid argument passed to Gemini API: {e}")
+                 logger.error(f"Error suggests invalid argument passed to Gemini API: {e}") # Use logger.error
             raise ConnectionError(f"Gemini API request failed: {e}") from e
         except Exception as e:
-            print(f"Unexpected error in GeminiAdapter stream_generate: {e}\n{traceback.format_exc()}")
+            logger.critical(f"Unexpected error in GeminiAdapter stream_generate: {e}", exc_info=True) # Use logger.critical
             raise RuntimeError(f"GeminiAdapter failed: {e}") from e

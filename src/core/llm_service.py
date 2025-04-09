@@ -15,6 +15,7 @@
 
 import asyncio
 import json
+import logging
 import traceback
 from typing import (
     Any,
@@ -28,6 +29,8 @@ from typing import (
     runtime_checkable,
 )
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 # --- Data Classes for Structured Responses ---
 
@@ -131,6 +134,7 @@ class LLMService:
         self._base_system_prompt = base_system_prompt
         self._tool_start_delimiter = "```tool\n"
         self._tool_end_delimiter = "\n```"
+        logger.info("LLMService initialized.")
 
     def _clean_mcp_schema_for_gemini(self, mcp_schema: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -170,6 +174,7 @@ class LLMService:
         Returns:
             The complete system prompt string.
         """
+        logger.debug("Compiling system prompt...")
         prompt_lines = [base_prompt_content]
         prompt_lines.append("\n--- Tool Usage Instructions ---")
 
@@ -197,13 +202,16 @@ class LLMService:
                       try:
                            params_str = json.dumps(cleaned_parameters, indent=4)
                            prompt_lines.append(f"  Parameters Schema (JSON):\n{params_str}")
-                      except Exception:
+                      except Exception as e:
+                            logger.warning(f"Failed to dump parameters schema to JSON for tool {tool_def['qualified_name']}: {e}", exc_info=True)
                             prompt_lines.append(f"  Parameters Schema: {cleaned_parameters}")
                  else:
                       prompt_lines.append("  Parameters Schema: None")
 
         prompt_lines.append("\n--- Conversation ---")
-        return "\n".join(prompt_lines)
+        compiled_prompt = "\n".join(prompt_lines)
+        logger.debug(f"Compiled system prompt length: {len(compiled_prompt)} chars.")
+        return compiled_prompt
 
     async def _parse_stream(
         self,
@@ -222,8 +230,10 @@ class LLMService:
             Structured LLMResponsePart objects (TextChunk, ToolCallIntent, ErrorInfo).
         """
         buffer = ""
+        logger.debug("Starting to parse adapter stream...")
         try:
             async for chunk in raw_adapter_stream:
+                logger.debug(f"Parser received chunk: '{chunk}'")
                 buffer += chunk
                 while True: # Process buffer repeatedly
                     start_index = buffer.find(self._tool_start_delimiter)
@@ -239,13 +249,18 @@ class LLMService:
                     try:
                         tool_data = json.loads(json_content)
                         if isinstance(tool_data, dict) and "tool" in tool_data and "arguments" in tool_data:
+                            logger.info(f"Parser yielding ToolCallIntent for: {tool_data.get('tool')}")
                             yield ToolCallIntent(tool_name=tool_data["tool"], arguments=tool_data["arguments"])
                         else: raise ValueError("Parsed JSON missing required 'tool' or 'arguments' keys.")
                     except Exception as e:
+                         logger.error(f"Failed to parse/validate tool call JSON: '{json_content}'. Error: {e}", exc_info=True)
                          yield ErrorInfo(message=f"Failed to parse/validate tool call JSON.", details=f"Error: {e}. Content: '{json_content}'")
                     buffer = buffer[end_index + len(self._tool_end_delimiter):]
             if buffer: yield TextChunk(content=buffer)
+            logger.debug("Finished parsing adapter stream.")
+            yield EndOfTurn()
         except Exception as e:
+            logger.error(f"Error receiving or processing data from LLM adapter stream: {e}", exc_info=True)
             yield ErrorInfo(message=f"Error receiving data from LLM adapter: {e}", details=traceback.format_exc())
 
     async def generate_response(
@@ -284,7 +299,7 @@ class LLMService:
             }
 
             # 4. Call the adapter to get the raw stream
-            print("LLM Service: Calling adapter stream_generate...") # Logging
+            logger.debug(f"LLM Service: Calling adapter stream_generate... History length: {len(history)}")
             raw_stream = self._adapter.stream_generate(
                 prompt_and_history=prompt_and_history_for_adapter, # Pass combined prompt+history
                 config=config
@@ -299,5 +314,6 @@ class LLMService:
 
         except Exception as e:
             error_details = traceback.format_exc()
-            print(f"LLM Service: Error during generate_response: {e}\n{error_details}")
+            logger.error(f"LLM Service: Error during generate_response: {e}\n{error_details}")
             yield ErrorInfo(message=f"Error generating response: {e}", details=error_details)
+            yield EndOfTurn()

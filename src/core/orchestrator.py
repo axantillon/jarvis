@@ -6,8 +6,13 @@
 # - Implemented handle_input logic including LLM calls and tool execution flow.
 # - Modified handle_input to accept and pass a user-specific system_prompt.
 # - Added logging for handle_input start/end.
+# - Added detailed history message logging controlled by ORCHESTRATOR_DETAILED_LOGGING env var.
+# - Improved detailed logging: Added colors, indented JSON, fixed TypeError for None content.
+# - Refactored logging: Removed basicConfig, use DEBUG level for detailed logs, removed custom flag.
 
 import asyncio
+import json
+import os
 import traceback
 from typing import Dict, List, AsyncGenerator, Optional, Any, cast
 import logging
@@ -20,16 +25,23 @@ from .llm_service import (
     TextChunk,
     ToolCallIntent,
     ErrorInfo,
-    ToolDefinition, # We'll need to construct this
+    ToolDefinition,
     LLMConfig,
     EndOfTurn
 )
 from .mcp_coordinator import MCPCoordinator, ToolRegistryEntry
 
-# Configure logging
-# Setting level to INFO to capture the new logs
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Configure logging - REMOVED basicConfig call
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__) # Get logger named after the module
+
+# ANSI Color Codes for Logging - Keep these for the debug formatter
+COLOR_BLUE = "\033[94m"
+COLOR_GREEN = "\033[92m"
+COLOR_YELLOW = "\033[93m"
+COLOR_MAGENTA = "\033[95m"
+COLOR_CYAN = "\033[96m"
+COLOR_RESET = "\033[0m"
 
 class ConversationOrchestrator:
     """
@@ -56,6 +68,14 @@ class ConversationOrchestrator:
         # TODO: Add configuration (max history, retries, etc.) if needed
         self._max_history_len = 50 # Example: Keep last 50 messages
 
+        # --- Removed detailed logging config ---
+        # self._log_history_messages = os.environ.get("ORCHESTRATOR_DETAILED_LOGGING", "false").lower() in ("true", "1", "t")
+        # if self._log_history_messages:
+        #     logger.info("Orchestrator detailed history logging ENABLED.")
+        # else:
+        #     logger.info("Orchestrator detailed history logging DISABLED.")
+        # --- End removal ---
+
     def _get_history(self, session_id: str) -> List[ChatMessage]:
         """Retrieves or initializes history for a session."""
         if session_id not in self._histories:
@@ -66,10 +86,56 @@ class ConversationOrchestrator:
         """Adds a message to the history for a session, enforcing max length."""
         history = self._get_history(session_id)
         history.append(message)
-        # Simple truncation from the beginning (keeping system prompts might be better)
+
+        # --- Use logger.debug for detailed logging ---
+        role = message['role']
+        log_content = message.get('content')
+        log_tool_name = message.get('tool_name')
+        log_data = message.get('data')
+        log_data_str = ""
+        data_prefix = "" # To indicate formatting type
+
+        # Determine color based on role
+        role_color = COLOR_BLUE
+        if role == 'user': role_color = COLOR_CYAN
+        elif role == 'assistant': role_color = COLOR_GREEN
+        elif role == 'tool': role_color = COLOR_YELLOW
+
+        # Safely format data as indented JSON if possible
+        if log_data is not None:
+            try:
+                log_data_str = json.dumps(log_data, indent=2, ensure_ascii=False) # Use indent=2, ensure_ascii=False
+                data_prefix = "(JSON Data):" # Indicate successful JSON formatting
+            except TypeError:
+                log_data_str = str(log_data) # Fallback
+                data_prefix = "(String Data):" # Indicate fallback formatting
+
+        # Construct the log message with colors
+        log_msg_parts = [
+            f"{COLOR_MAGENTA}History Add ({session_id}){COLOR_RESET}:",
+            f"Role: {role_color}{role}{COLOR_RESET}"
+        ]
+
+        if log_content is not None and isinstance(log_content, str):
+             content_display = f"'{log_content[:150]}{'...' if len(log_content) > 150 else ''}'"
+             log_msg_parts.append(f"Content: {COLOR_GREEN}{content_display}{COLOR_RESET}")
+        elif log_content is not None:
+             log_msg_parts.append(f"Content: {COLOR_GREEN}{str(log_content)}{COLOR_RESET}")
+
+        if log_tool_name:
+             log_msg_parts.append(f"ToolName: {COLOR_YELLOW}{log_tool_name}{COLOR_RESET}")
+
+        if log_data_str:
+             # Add prefix and put data on new line
+             data_display = f"\n{data_prefix}\n{log_data_str}"
+             if len(data_display) > 500: data_display = data_display[:500] + "\n..."
+             log_msg_parts.append(f"Data: {COLOR_MAGENTA}{data_display}{COLOR_RESET}")
+
+        logger.debug(" ".join(log_msg_parts))
+        # --- End detailed logging ---
+
+        # Simple truncation
         while len(history) > self._max_history_len:
-            # Careful not to remove a potential leading system prompt if we add one later
-            # For now, just remove the oldest
             history.pop(0)
 
     def _get_tool_definitions(self) -> List[ToolDefinition]:
@@ -78,8 +144,13 @@ class ConversationOrchestrator:
         in the format expected by LLMService.
         """
         definitions: List[ToolDefinition] = []
+        # Check if coordinator and registry exist
         if not self.mcp_coordinator or not self.mcp_coordinator.tool_registry:
+             # Corrected log: Removed session_id which is not available here
+             logger.warning("Attempted to get tool definitions, but MCPCoordinator or tool_registry is missing.")
              return definitions
+
+        registry_size = len(self.mcp_coordinator.tool_registry) # Get size before loop
 
         for entry in self.mcp_coordinator.tool_registry.values():
              mcp_tool_def = entry.definition
@@ -92,6 +163,9 @@ class ConversationOrchestrator:
                   description=getattr(mcp_tool_def, 'description', 'No description available.'),
                   parameters=parameters
              ))
+
+        # Corrected log: Removed session_id, logged count after loop
+        logger.debug(f"Extracted {len(definitions)} tool definitions (from registry size {registry_size}).")
         return definitions
 
     async def _execute_tool_call(
@@ -111,33 +185,41 @@ class ConversationOrchestrator:
         """
         tool_result_message: ChatMessage
         try:
-            print(f"Orchestrator: Executing tool '{tool_intent.tool_name}' with args: {tool_intent.arguments}") # Use original name
-            # Ensure mcp_coordinator is ready (it should be if initialized via async with)
+            # Use logger.info for starting, logger.debug for arguments
+            logger.info(f"Orchestrator ({session_id}): Executing tool '{tool_intent.tool_name}'...")
+            logger.debug(f"Orchestrator ({session_id}): Tool arguments: {tool_intent.arguments}")
+
             if not self.mcp_coordinator:
+                 # Use logger.error for critical failures
+                 logger.error(f"Orchestrator ({session_id}): MCP Coordinator not available during tool execution.")
                  raise RuntimeError("MCP Coordinator not available.")
 
             result_data = await self.mcp_coordinator.call_tool(
-                qualified_tool_name=tool_intent.tool_name, # Use original name
+                qualified_tool_name=tool_intent.tool_name,
                 arguments=tool_intent.arguments
             )
-            print(f"Orchestrator: Tool '{tool_intent.tool_name}' executed successfully.") # Use original name
+            logger.info(f"Orchestrator ({session_id}): Tool '{tool_intent.tool_name}' executed successfully.")
+            # logger.debug(f"Orchestrator ({session_id}): Tool result data: {result_data}") # Optionally log result data
+
             tool_result_message = ChatMessage(
                 role='tool',
-                tool_name=tool_intent.tool_name, # Use original name in history
-                content=None, # Tool results go in 'data'
-                data=result_data # Assuming call_tool returns the JSON-able result
+                tool_name=tool_intent.tool_name,
+                content=None,
+                data=result_data
             )
         except Exception as e:
-            error_details = traceback.format_exc()
-            print(f"Orchestrator: Error executing tool '{tool_intent.tool_name}': {e}\n{error_details}") # Use original name
+            # Use logger.error with exc_info=True for exceptions
+            logger.error(f"Orchestrator ({session_id}): Error executing tool '{tool_intent.tool_name}': {e}", exc_info=True)
+            # traceback.print_exc() # No longer needed
+
             tool_result_message = ChatMessage(
                 role='tool',
-                tool_name=tool_intent.tool_name, # Use original name in history
-                content=None, # Error details go in 'data'
+                tool_name=tool_intent.tool_name,
+                content=None,
                 data={ # Structure the error data
                     "error": f"Tool execution failed: {type(e).__name__}",
                     "message": str(e),
-                    # "details": error_details # Maybe too verbose for LLM history
+                    # "details": traceback.format_exc() # Maybe too verbose
                 }
             )
         return tool_result_message
@@ -147,8 +229,8 @@ class ConversationOrchestrator:
         self,
         session_id: str,
         text: str,
-        llm_config: Optional[LLMConfig] = None, # LLMConfig is defined in llm_service.py
-        system_prompt: Optional[str] = None      # Added: User-specific system prompt
+        llm_config: Optional[LLMConfig] = None,
+        system_prompt: Optional[str] = None
     ) -> AsyncGenerator[LLMResponsePart, None]:
         """
         Handles user input, generates responses, and manages tool calls.
@@ -162,124 +244,87 @@ class ConversationOrchestrator:
         Yields:
             LLMResponsePart objects representing the conversation turn.
         """
+        # Use logger.info for entry point
         logger.info(f"Orchestrator ({session_id}): Starting handle_input for text: '{text[:100]}...'")
         current_llm_config = llm_config if llm_config is not None else LLMConfig({})
         session_history = self._get_history(session_id)
 
         # 1. Add user message to history
         user_message = ChatMessage(role='user', content=text, data=None, tool_name=None)
-        self._add_message(session_id, user_message)
+        self._add_message(session_id, user_message) # This will log via logger.debug if enabled
 
-        handled_successfully = False  # Flag to track if we completed successfully
+        # handled_successfully = False # Not currently used
 
         # --- Start LLM Interaction Loop ---
-        # This loop allows re-prompting after a tool call
         while True:
             tool_definitions = self._get_tool_definitions()
-            history_for_llm = list(session_history) # Create a copy for this turn
+            history_for_llm = list(session_history)
 
-            # Use a buffer to collect assistant's text before a potential tool call
             assistant_text_buffer = ""
             last_response_part_was_tool_call = False
 
             try:
-                print(f"Orchestrator ({session_id}): Calling LLM service...")
+                logger.info(f"Orchestrator ({session_id}): Calling LLM service...") # Use logger.info
                 response_stream = self.llm_service.generate_response(
                     history=history_for_llm,
                     tool_definitions=tool_definitions,
                     config=current_llm_config,
-                    system_prompt=system_prompt # Pass the user-specific prompt
+                    system_prompt=system_prompt
                 )
 
                 # 2. Process LLM response stream
                 async for part in response_stream:
-                    last_response_part_was_tool_call = False # Reset on each new part
+                    last_response_part_was_tool_call = False
 
                     if isinstance(part, TextChunk):
-                        # Accumulate text and yield it immediately
                         assistant_text_buffer += part.content
-                        yield part
+                        yield part # Yield immediately
 
                     elif isinstance(part, ToolCallIntent):
-                        print(f"Orchestrator ({session_id}): Received tool intent: {part.tool_name}")
+                        logger.info(f"Orchestrator ({session_id}): Received tool intent: {part.tool_name}") # Use logger.info
                         last_response_part_was_tool_call = True
 
-                        # A. Add preceding text (if any) as assistant message
                         if assistant_text_buffer:
                              assistant_message = ChatMessage(
-                                  role='assistant',
-                                  content=assistant_text_buffer,
-                                  data=None,
-                                  tool_name=None
+                                  role='assistant', content=assistant_text_buffer, data=None, tool_name=None
                              )
-                             self._add_message(session_id, assistant_message)
-                             assistant_text_buffer = "" # Reset buffer
+                             self._add_message(session_id, assistant_message) # Logs via DEBUG
+                             assistant_text_buffer = ""
 
-                        # B. Yield the intent (signals caller e.g., WebSocket handler)
-                        yield part # Inform caller about the tool call attempt
+                        yield part # Yield intent to caller
 
-                        # C. Execute the tool
-                        tool_result_message = await self._execute_tool_call(session_id, part)
+                        tool_result_message = await self._execute_tool_call(session_id, part) # Logs internally
 
-                        # D. Add tool result to history (crucial for next LLM turn)
-                        self._add_message(session_id, tool_result_message)
+                        self._add_message(session_id, tool_result_message) # Logs result via DEBUG
 
-                        # E. Break inner loop to re-prompt LLM with tool result
-                        break # Exit the inner async for loop
+                        break # Re-prompt LLM
 
                     elif isinstance(part, ErrorInfo):
-                        # Yield error info immediately
-                        print(f"Orchestrator ({session_id}): Received error from LLM stream: {part.message}")
+                        logger.error(f"Orchestrator ({session_id}): Received error from LLM stream: {part.message}") # Use logger.error
+                        logger.debug(f"Orchestrator ({session_id}): LLM Error details: {part.details}") # Log details at debug
                         yield part
-                        # Optionally add a system message to history about the error?
-                        # self._add_message(session_id, ChatMessage(role='system', content=f"LLM Error: {part.message}", data=part.details))
-                        # Decide whether to break or continue based on error severity? For now, continue if possible.
 
-                    # --- ADDED: Handle EndOfTurn --- #
                     elif isinstance(part, EndOfTurn):
-                        # This signal is used by the LLMService to indicate completion.
-                        # The Orchestrator itself doesn't need to do anything with it here,
-                        # as the WebSocketHandler will handle formatting it for the client.
-                        # We just need to prevent it falling into the 'else' block below.
-                        pass # Explicitly ignore it in the orchestrator loop
+                        pass # Ignore in orchestrator
 
                     else:
-                         # Should not happen if LLMResponsePart is defined correctly
                          unknown_part_msg = f"Orchestrator ({session_id}): Received unknown part type from LLM stream: {type(part)}"
-                         print(unknown_part_msg)
+                         logger.warning(unknown_part_msg) # Use logger.warning
                          yield ErrorInfo(message=unknown_part_msg)
 
-                # --- After processing the stream ---
-
-                # If the loop finished *because* of a tool call, restart the outer loop
-                if last_response_part_was_tool_call:
-                    logger.info(f"Orchestrator ({session_id}): Re-prompting LLM after tool call {part.tool_name if isinstance(part, ToolCallIntent) else 'unknown'}.")
-                    continue # Go back to the start of the 'while True' loop
-
-                # If the loop finished *without* breaking for a tool call, it means the LLM turn is complete
-                # Add the final assistant text to history
-                if assistant_text_buffer:
-                     assistant_message = ChatMessage(
-                          role='assistant',
-                          content=assistant_text_buffer,
-                          data=None,
-                          tool_name=None
-                     )
-                     self._add_message(session_id, assistant_message)
-                     assistant_text_buffer = "" # Clear buffer just in case
-
-                handled_successfully = True # Mark as successful if we reached the end naturally
-                print(f"Orchestrator ({session_id}): LLM turn finished successfully.")
-                break # Exit the 'while True' loop normally
+                # --- LLM Turn Finished ---
+                if not last_response_part_was_tool_call:
+                    # Add final assistant message if any text was buffered and no tool call occurred
+                    if assistant_text_buffer:
+                        final_assistant_message = ChatMessage(
+                            role='assistant', content=assistant_text_buffer, data=None, tool_name=None
+                        )
+                        self._add_message(session_id, final_assistant_message) # Logs via DEBUG
+                    # If the loop finished without yielding a tool call, we are done with this user input
+                    logger.info(f"Orchestrator ({session_id}): Finished processing user input.") # Use logger.info
+                    break # Exit the while True loop
 
             except Exception as e:
-                error_trace = traceback.format_exc()
-                logger.error(f"Orchestrator ({session_id}): Unhandled error in handle_input: {e}\n{error_trace}")
-                yield ErrorInfo(message=f"Orchestrator error: {e}", details=error_trace)
-                # Ensure we still break the loop on unhandled errors
-                break
-            finally:
-                # Yield an EndOfTurn signal regardless of how the loop ended (success, error, tool call exit)
-                # The WebSocket handler uses this to know the processing for this input is done.
-                logger.info(f"Orchestrator ({session_id}): Turn completed, yielding EndOfTurn signal. handled_successfully={handled_successfully}")
-                yield EndOfTurn()
+                logger.error(f"Orchestrator ({session_id}): Unhandled error in LLM interaction loop: {e}", exc_info=True) # Use logger.error
+                yield ErrorInfo(message=f"Internal orchestrator error: {e}", details=traceback.format_exc())
+                break # Exit loop on unhandled error

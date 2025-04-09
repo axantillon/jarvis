@@ -9,6 +9,8 @@
 # - Added detailed history message logging controlled by ORCHESTRATOR_DETAILED_LOGGING env var.
 # - Improved detailed logging: Added colors, indented JSON, fixed TypeError for None content.
 # - Refactored logging: Removed basicConfig, use DEBUG level for detailed logs, removed custom flag.
+# - Yield ToolResultData after executing a tool.
+# - Yield RePromptContext after adding tool result to history (representing re-prompt info). (Renamed from InternalMonologue)
 
 import asyncio
 import json
@@ -27,7 +29,9 @@ from .llm_service import (
     ErrorInfo,
     ToolDefinition,
     LLMConfig,
-    EndOfTurn
+    EndOfTurn,
+    ToolResultData,
+    RePromptContext # Updated import
 )
 from .mcp_coordinator import MCPCoordinator, ToolRegistryEntry
 
@@ -242,7 +246,9 @@ class ConversationOrchestrator:
             system_prompt: Optional user-specific system prompt to override the default.
 
         Yields:
-            LLMResponsePart objects representing the conversation turn.
+            LLMResponsePart objects representing the conversation turn, including
+            TextChunk, ToolCallIntent, ErrorInfo, EndOfTurn, ToolResultData,
+            and RePromptContext.
         """
         # Use logger.info for entry point
         logger.info(f"Orchestrator ({session_id}): Starting handle_input for text: '{text[:100]}...'")
@@ -295,7 +301,18 @@ class ConversationOrchestrator:
 
                         tool_result_message = await self._execute_tool_call(session_id, part) # Logs internally
 
+                        # --- Yield the raw tool result ---
+                        yield ToolResultData(
+                            tool_name=tool_result_message['tool_name'],
+                            result=tool_result_message['data']
+                        )
+                        # --- End yield tool result ---
+
                         self._add_message(session_id, tool_result_message) # Logs result via DEBUG
+
+                        # --- Yield the re-prompt context info ---
+                        yield RePromptContext(message=tool_result_message) # Updated type
+                        # --- End yield re-prompt context ---
 
                         break # Re-prompt LLM
 
@@ -306,6 +323,11 @@ class ConversationOrchestrator:
 
                     elif isinstance(part, EndOfTurn):
                         pass # Ignore in orchestrator
+
+                    # --- Check for new types (shouldn't happen here) ---
+                    elif isinstance(part, (ToolResultData, RePromptContext)): # Updated check
+                        logger.warning(f"Orchestrator ({session_id}): Unexpectedly received {type(part)} from LLM stream.")
+                    # --- End check ---
 
                     else:
                          unknown_part_msg = f"Orchestrator ({session_id}): Received unknown part type from LLM stream: {type(part)}"
@@ -322,6 +344,7 @@ class ConversationOrchestrator:
                         self._add_message(session_id, final_assistant_message) # Logs via DEBUG
                     # If the loop finished without yielding a tool call, we are done with this user input
                     logger.info(f"Orchestrator ({session_id}): Finished processing user input.") # Use logger.info
+                    yield EndOfTurn() # Explicitly yield EndOfTurn when the loop finishes naturally
                     break # Exit the while True loop
 
             except Exception as e:

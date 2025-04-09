@@ -12,6 +12,10 @@
 # - Refined LLMConfig: Removed api_key, made model/safety optional overrides.
 # - Modified generate_response and _compile_system_prompt to handle user-specific system prompts.
 # - Corrected generate_response to pass prompt/history as a dict to the adapter.
+# - Added ToolResultData and RePromptContext data classes to LLMResponsePart.
+# - Fixed NameError for ToolDefinition type hint by using string literal ('ToolDefinition').
+# - Reverted LLMResponsePart Union definition to use direct types instead of string literals.
+# - Added detailed debug logging to _parse_stream.
 
 import asyncio
 import json
@@ -56,9 +60,6 @@ class ErrorInfo:
 class EndOfTurn:
     """Signals the successful completion of the LLM's response turn."""
     pass # No content needed, the type itself is the signal
-
-# Union type for the parts yielded by the service
-LLMResponsePart = Union[TextChunk, ToolCallIntent, ErrorInfo, EndOfTurn]
 
 # --- Core Data Structures ---
 
@@ -117,6 +118,27 @@ class LLMAdapter(Protocol):
         """Streams raw text chunks from the underlying LLM."""
         ... # pragma: no cover
 
+# --- New Data Classes for Enhanced Frontend Info ---
+
+@dataclass
+class ToolResultData:
+    """Represents the actual result obtained from executing a tool."""
+    tool_name: str
+    result: Any # The raw data returned by the tool
+
+@dataclass
+class RePromptContext: # Renamed from InternalMonologue
+    """Represents the context (tool result message) added before re-prompting the LLM."""
+    # Using ChatMessage structure is convenient for representing the re-prompt part
+    message: ChatMessage
+
+# --- Union type for the parts yielded by the service ---
+# Define this *after* all constituent types are defined.
+# Use direct types here as they are defined above in the file.
+LLMResponsePart = Union[
+    TextChunk, ToolCallIntent, ErrorInfo, EndOfTurn, ToolResultData, RePromptContext
+]
+
 # --- LLM Service ---
 
 class LLMService:
@@ -157,7 +179,7 @@ class LLMService:
     def _compile_system_prompt(
         self,
         base_prompt_content: str, # Added: The base content to use
-        tool_definitions: List[ToolDefinition]
+        tool_definitions: List['ToolDefinition'] # Use string literal here for forward reference
     ) -> str:
         """
         Compiles the final system prompt for the LLM.
@@ -187,7 +209,7 @@ class LLMService:
                 "\n2. Then, on a **new line**, provide the required tool call JSON object, enclosed *exactly* like this, with **no other text on the same line or within the delimiters**:"
                 f"\n{self._tool_start_delimiter}"
                 '{ "tool": "server_id:tool_name", "arguments": { /* ...args... */ } }'
-                f"{self._tool_end_delimiter}"
+                f"\n{self._tool_end_delimiter}"
                 "\nAfter you receive the result from the tool, summarize it for the user."
                 "\n\n--- Available Tools ---"
                 "\nHere are the tools available to you (described in a format similar to function declarations):"
@@ -216,7 +238,7 @@ class LLMService:
     async def _parse_stream(
         self,
         raw_adapter_stream: AsyncGenerator[str, None]
-    ) -> AsyncGenerator[LLMResponsePart, None]:
+    ) -> AsyncGenerator[LLMResponsePart, None]: # Type hint remains Union
         """
         Parses the raw text stream from the adapter (Original Buffering Logic).
 
@@ -232,44 +254,97 @@ class LLMService:
         buffer = ""
         logger.debug("Starting to parse adapter stream...")
         try:
+            chunk_count = 0
             async for chunk in raw_adapter_stream:
-                logger.debug(f"Parser received chunk: '{chunk}'")
+                chunk_count += 1
+                # Represent potential hidden chars for logging
+                log_chunk = repr(chunk)
+                logger.debug(f"Parser received chunk #{chunk_count}: {log_chunk}")
                 buffer += chunk
+                logger.debug(f"  Buffer is now ({len(buffer)} chars): {repr(buffer)}")
+
                 while True: # Process buffer repeatedly
+                    logger.debug("  Processing buffer loop...")
                     start_index = buffer.find(self._tool_start_delimiter)
-                    if start_index == -1: break
+                    logger.debug(f"  Find start '{repr(self._tool_start_delimiter)}': index={start_index}")
+
+                    if start_index == -1:
+                        # No start delimiter found in current buffer
+                        logger.debug("  No start delimiter found. Breaking inner loop (will yield buffer at end of stream).")
+                        break # Exit inner loop, wait for more chunks or end of stream
+
+                    # Found a tool start delimiter
+                    logger.debug(f"  Found start delimiter at index {start_index}.")
                     if start_index > 0:
-                        yield TextChunk(content=buffer[:start_index])
+                        # Yield text before the delimiter
+                        text_to_yield = buffer[:start_index]
+                        logger.debug(f"  Yielding TextChunk: {repr(text_to_yield)}")
+                        yield TextChunk(content=text_to_yield)
                         buffer = buffer[start_index:]
-                        start_index = 0
+                        logger.debug(f"  Trimmed buffer to: {repr(buffer)}")
+                        # After yielding text, reset start_index relative to new buffer (should be 0)
+                        start_index = 0 # Explicitly set for clarity
+
+                    # Now, look for the end delimiter *after* the start delimiter
                     end_index = buffer.find(self._tool_end_delimiter, len(self._tool_start_delimiter))
-                    if end_index == -1: break
+                    logger.debug(f"  Find end '{repr(self._tool_end_delimiter)}' (after start): index={end_index}")
+
+                    if end_index == -1:
+                        # Found start but not end, need more chunks
+                        logger.debug("  Found start but not end. Breaking inner loop to wait for more chunks.")
+                        break # Exit inner loop, wait for more chunks
+
+                    # Found both start and end delimiters
+                    logger.debug(f"  Found end delimiter at index {end_index}.")
                     json_content_start = start_index + len(self._tool_start_delimiter)
                     json_content = buffer[json_content_start:end_index].strip()
+                    logger.debug(f"  Extracted JSON content: {repr(json_content)}")
+
                     try:
                         tool_data = json.loads(json_content)
                         if isinstance(tool_data, dict) and "tool" in tool_data and "arguments" in tool_data:
-                            logger.info(f"Parser yielding ToolCallIntent for: {tool_data.get('tool')}")
-                            yield ToolCallIntent(tool_name=tool_data["tool"], arguments=tool_data["arguments"])
-                        else: raise ValueError("Parsed JSON missing required 'tool' or 'arguments' keys.")
-                    except Exception as e:
-                         logger.error(f"Failed to parse/validate tool call JSON: '{json_content}'. Error: {e}", exc_info=True)
-                         yield ErrorInfo(message=f"Failed to parse/validate tool call JSON.", details=f"Error: {e}. Content: '{json_content}'")
+                            logger.debug(f"  Successfully parsed tool data. Yielding ToolCallIntent: {tool_data}")
+                            yield ToolCallIntent(
+                                tool_name=str(tool_data["tool"]), # Ensure name is string
+                                arguments=tool_data["arguments"] # Arguments can be any JSON structure
+                            )
+                        else:
+                             logger.warning(f"Parsed JSON blob does not match expected tool call format: {json_content}")
+                             logger.debug("  Yielding ErrorInfo for invalid format.")
+                             yield ErrorInfo(message="Invalid tool call format received from LLM.")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON tool call blob: {e}\nContent: {repr(json_content)}", exc_info=True)
+                        logger.debug(f"  Yielding ErrorInfo for JSON decode error: {e}")
+                        yield ErrorInfo(message=f"Failed to parse tool call JSON: {e}", details=json_content)
+                    except Exception as e: # Catch other potential errors during processing
+                        logger.error(f"Unexpected error processing tool call data: {e}\nContent: {repr(json_content)}", exc_info=True)
+                        logger.debug(f"  Yielding ErrorInfo for unexpected processing error: {e}")
+                        yield ErrorInfo(message=f"Unexpected error processing tool call: {e}", details=json_content)
+
+                    # Move buffer past the processed tool call section
                     buffer = buffer[end_index + len(self._tool_end_delimiter):]
-            if buffer: yield TextChunk(content=buffer)
-            logger.debug("Finished parsing adapter stream.")
-            yield EndOfTurn()
+                    logger.debug(f"  Trimmed buffer after tool processing: {repr(buffer)}")
+                    # Continue processing the rest of the buffer in the inner loop
+                    logger.debug("  Continuing inner loop...")
+
+            # After the stream ends, yield any remaining text in the buffer
+            if buffer:
+                logger.debug(f"Stream ended. Yielding final TextChunk from buffer: {repr(buffer)}")
+                yield TextChunk(content=buffer)
+
         except Exception as e:
-            logger.error(f"Error receiving or processing data from LLM adapter stream: {e}", exc_info=True)
-            yield ErrorInfo(message=f"Error receiving data from LLM adapter: {e}", details=traceback.format_exc())
+            logger.error(f"Error during raw adapter stream processing: {e}", exc_info=True)
+            yield ErrorInfo(message=f"Stream parsing error: {e}", details=traceback.format_exc())
+        finally:
+            logger.debug("Finished parsing adapter stream.")
 
     async def generate_response(
         self,
-        history: List[ChatMessage],
-        tool_definitions: List[ToolDefinition],
+        history: List[ChatMessage], # Use direct type here
+        tool_definitions: List['ToolDefinition'], # Use string literal here
         config: LLMConfig, # This is the config passed by the caller (e.g., Orchestrator)
         system_prompt: Optional[str] = None # Added: User-specific override
-    ) -> AsyncGenerator[LLMResponsePart, None]:
+    ) -> AsyncGenerator[LLMResponsePart, None]: # Type hint remains Union
         """
         Generates a response from the LLM based on history and available tools.
 
@@ -282,38 +357,32 @@ class LLMService:
         Yields:
             LLMResponsePart objects representing text chunks, tool intents, or errors.
         """
+        logger.info("LLM Service: Generating response...")
         try:
-            # 1. Determine the effective base prompt
-            effective_base_prompt = system_prompt if system_prompt is not None else self._base_system_prompt
+            # Determine the system prompt content to use
+            prompt_content_to_use = system_prompt if system_prompt is not None else self._base_system_prompt
+            # Compile the full system prompt including tool descriptions
+            final_system_prompt = self._compile_system_prompt(prompt_content_to_use, tool_definitions)
 
-            # 2. Compile the full system prompt including tool definitions
-            compiled_system_prompt_str = self._compile_system_prompt(
-                base_prompt_content=effective_base_prompt,
-                tool_definitions=tool_definitions
-            )
-
-            # 3. Corrected: Prepare input as a dictionary for GeminiAdapter
-            prompt_and_history_for_adapter = {
-                "system_prompt": compiled_system_prompt_str,
-                "history": history # Pass the original history; adapter handles formatting
+            # Prepare input for the adapter (this structure might be adapter-specific)
+            # Assuming a structure like {'system': str, 'history': List[ChatMessage]}
+            # based on Gemini adapter needs. Adjust if other adapters expect different formats.
+            adapter_input = {
+                "system": final_system_prompt,
+                "history": history
             }
 
-            # 4. Call the adapter to get the raw stream
-            logger.debug(f"LLM Service: Calling adapter stream_generate... History length: {len(history)}")
-            raw_stream = self._adapter.stream_generate(
-                prompt_and_history=prompt_and_history_for_adapter, # Pass combined prompt+history
-                config=config
-            )
+            logger.debug(f"LLM Service: Calling adapter stream_generate with config: {config}")
+            # logger.debug(f"LLM Service: Adapter input structure:\nSystem: {final_system_prompt[:200]}...\nHistory items: {len(history)}")
 
-            # 5. Parse the raw stream and yield structured parts
+            raw_stream = self._adapter.stream_generate(adapter_input, config)
             async for part in self._parse_stream(raw_stream):
                 yield part
 
-            # 6. Signal end of turn after stream finishes successfully
+            # Signal the end of the turn after successfully processing the stream
             yield EndOfTurn()
+            logger.info("LLM Service: Finished generating response stream.")
 
         except Exception as e:
-            error_details = traceback.format_exc()
-            logger.error(f"LLM Service: Error during generate_response: {e}\n{error_details}")
-            yield ErrorInfo(message=f"Error generating response: {e}", details=error_details)
-            yield EndOfTurn()
+            logger.error(f"LLM Service: Error during response generation: {e}", exc_info=True)
+            yield ErrorInfo(message=f"LLM service error: {e}", details=traceback.format_exc())

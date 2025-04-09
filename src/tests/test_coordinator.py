@@ -3,9 +3,7 @@ import os
 from pathlib import Path
 import traceback
 from mcp import types as mcp_types
-
 from src.core.mcp_coordinator import MCPCoordinator
-
 async def main():
     # Get the absolute path to mcp.json
     current_dir = Path(__file__).parent.parent.parent  # Go up to project root

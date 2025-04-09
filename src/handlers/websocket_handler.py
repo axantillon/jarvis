@@ -11,6 +11,7 @@
 # - Added logging for message receipt and response sending.
 # - Refactored logging: Removed basicConfig, replaced print with logger calls.
 # - CORRECTED: Removed all password authentication logic. Expects 'identify' message.
+# - Added handling for ToolResultData and RePromptContext in _format_response_part. (Renamed from InternalMonologue)
 
 import asyncio
 import json
@@ -27,7 +28,9 @@ from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
 from src.core.orchestrator import ConversationOrchestrator
 from src.core.llm_service import (
-    LLMResponsePart, TextChunk, ToolCallIntent, ErrorInfo, EndOfTurn, LLMConfig
+    LLMResponsePart, TextChunk, ToolCallIntent, ErrorInfo, EndOfTurn, LLMConfig,
+    ToolResultData,
+    RePromptContext # Updated import
 )
 
 from dataclasses import dataclass
@@ -95,7 +98,21 @@ class WebSocketHandler:
         if isinstance(part, TextChunk):
              payload = {"type": "text", "payload": {"content": part.content}}
         elif isinstance(part, ToolCallIntent):
-             payload = {"type": "status", "payload": {"state": "processing", "tool": part.tool_name, "message": f"Attempting to use tool: {part.tool_name}", "arguments": part.arguments}}
+             # Note: Arguments might not be safely JSON serializable directly
+             # Consider adding a check or conversion here if needed.
+             payload = {"type": "status", "payload": {"state": "calling_tool", "tool": part.tool_name, "message": f"Attempting to use tool: {part.tool_name}", "arguments": part.arguments}}
+        elif isinstance(part, ToolResultData):
+             # Note: part.result could be complex. Ensure it's JSON serializable.
+             # We might need error handling or selective serialization here.
+             try:
+                # Attempt to serialize, assuming result is mostly JSON-friendly
+                 payload = {"type": "tool_result", "payload": {"tool_name": part.tool_name, "result": part.result}}
+             except TypeError as e:
+                 logger.warning(f"Could not serialize tool result data for {part.tool_name}: {e}. Sending simplified error.")
+                 payload = {"type": "tool_result", "payload": {"tool_name": part.tool_name, "result": {"error": "Result data not JSON serializable", "type": str(type(part.result))}}}
+        elif isinstance(part, RePromptContext): # Updated type check
+             # The message is already a ChatMessage TypedDict, which should be serializable
+             payload = {"type": "re_prompt_context", "payload": {"message": part.message}} # Updated message type
         elif isinstance(part, ErrorInfo):
              payload = {"type": "error", "payload": {"message": part.message, "details": part.details}}
         elif isinstance(part, EndOfTurn):
@@ -209,11 +226,19 @@ class WebSocketHandler:
                         ):
                             formatted_part = self._format_response_part(part)
                             if formatted_part:
-                                response_json = json.dumps(formatted_part)
-                                logger.debug(f"Handler ({session_id}, {user_session.email}): Sending part: {response_json[:150]}...")
-                                await websocket.send(response_json)
+                                try:
+                                    response_json = json.dumps(formatted_part)
+                                    logger.debug(f"Handler ({session_id}, {user_session.email}): Sending part: {response_json[:150]}...")
+                                    await websocket.send(response_json)
+                                except TypeError as e:
+                                     # This might happen if complex non-serializable objects leak into tool results/arguments
+                                     logger.error(f"Handler ({session_id}): Failed to serialize response part of type {formatted_part.get('type')}: {e}", exc_info=True)
+                                     # Send a generic error back to the client
+                                     error_payload = {"type": "error", "payload": {"message": "Internal server error: Failed to serialize response part.", "details": f"Type: {formatted_part.get('type')}, Error: {e}"}}
+                                     await websocket.send(json.dumps(error_payload))
                             else:
-                                logger.warning(f"Handler ({session_id}, {user_session.email}): Unknown part type from orchestrator: {type(part)}")
+                                # Handle case where _format_response_part returns None (though it shouldn't with current logic)
+                                logger.warning(f"Handler ({session_id}, {user_session.email}): Formatted part was None for orchestrator part type: {type(part)}")
                     else:
                         logger.warning(f"Handler ({session_id}, {user_session.email}): Received unknown message type or format: {msg_type}")
                         await websocket.send(json.dumps({"type": "error", "payload": {"message": "Unknown message type received."}}))

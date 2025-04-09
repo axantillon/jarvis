@@ -1,10 +1,14 @@
 # src/main.py
 # --- Application Entry Point ---
 # Purpose: Initializes all core components and starts the WebSocket server.
+#          Relies on the web_gateway.py for user authentication.
 # Changes:
 # - Initial implementation.
 # - Added AUTHORIZED_USERS dictionary for email/password auth, requires bcrypt.
 # - Reverted user config to be hardcoded in this file due to env var parsing issues.
+# - REMOVED bcrypt dependency and password hash loading/validation.
+# - REMOVED direct user authentication logic (moved to web_gateway.py).
+# - Kept AUTHORIZED_USERS structure for user-specific prompt additions.
 
 import asyncio
 import os
@@ -13,9 +17,9 @@ import traceback
 # import json # No longer needed
 from pathlib import Path
 
-# --- Password Hashing --- #
+# --- Password Hashing --- # - REMOVED
 # You need to install bcrypt: pip install bcrypt
-import bcrypt
+# import bcrypt # REMOVED
 
 # Utility function to hash a password (use this offline to generate hashes)
 # def hash_password(plain_password: str) -> bytes:
@@ -62,44 +66,43 @@ SYSTEM_PROMPT_PATH = str(project_root / "system_prompt.txt")
 HOST = "0.0.0.0" # Listen on all interfaces for container compatibility
 PORT = 8765 # Default WebSocket port, change if needed
 
-# --- User Authorization Configuration ---
-# Configuration is hardcoded here, but hashes are loaded from env vars.
-# Ensure TONY_HASH and PETER_HASH are set in your .env file.
+# --- User Authorization Configuration --- - MODIFIED
+# Configuration only contains user-specific prompt additions.
+# Authentication (password hashing/checking) is handled by web_gateway.py.
 AUTHORIZED_USERS = {
     "axantillon@gmail.com": {
-        "hashed_password": os.environ.get("TONY_HASH"),
+        # "hashed_password": os.environ.get("TONY_HASH"), # REMOVED - Handled by gateway
         "prompt_addition": "You are currently interacting with Tony Stark (User: axantillon@gmail.com). Address him with appropriate respect (e.g., 'Sir', or directly when appropriate). He expects concise, technically accurate information but appreciates your wit."
     },
     "aguilarcarboni@gmail.com": {
-        "hashed_password": os.environ.get("PETER_HASH"),
+        # "hashed_password": os.environ.get("PETER_HASH"), # REMOVED - Handled by gateway
         "prompt_addition": "You are currently interacting with Peter Parker (User: aguilarcarboni@gmail.com). Be friendly, slightly more casual, and helpful. He might need more detailed explanations of complex technical topics (just kidding, he's quite sharp!)."
     }
-    # Add other original users back if needed
+    # Add other original users back if needed, but only their prompt_addition
 }
 
-# --- Validate Loaded Hashes ---
-# Check if hashes were loaded correctly after defining the dict
-def validate_auth_config(auth_dict):
-    all_valid = True
-    for email, data in auth_dict.items():
-        if not data.get("hashed_password"):
-            print(f"CRITICAL ERROR: Missing hashed_password for user '{email}'. Ensure corresponding environment variable (e.g., TONY_HASH) is set.")
-            all_valid = False
-        # Optional: Add check for bcrypt hash format validity here if needed
-    return all_valid
+# --- Validate Loaded Hashes --- # - REMOVED
+# def validate_auth_config(auth_dict):
+#     all_valid = True
+#     for email, data in auth_dict.items():
+#         if not data.get("hashed_password"):
+#             print(f"CRITICAL ERROR: Missing hashed_password for user '{email}'. Ensure corresponding environment variable (e.g., TONY_HASH) is set.")
+#             all_valid = False
+#         # Optional: Add check for bcrypt hash format validity here if needed
+#     return all_valid
 
-AUTH_CONFIG_VALID = validate_auth_config(AUTHORIZED_USERS)
-# --- End User Authorization Configuration & Validation ---
+# AUTH_CONFIG_VALID = validate_auth_config(AUTHORIZED_USERS) # REMOVED
+# --- End User Authorization Configuration & Validation --- # - REMOVED
 
 async def main():
     """Initializes components and starts the server."""
     print("--- Starting Laserfocus Host ---")
 
-    # --- ADD Check for Auth Config Validity ---
-    if not AUTH_CONFIG_VALID:
-        print("Exiting due to invalid authorization configuration.")
-        return
-    # --- END Check ---
+    # --- ADD Check for Auth Config Validity --- # - REMOVED
+    # if not AUTH_CONFIG_VALID:
+    #     print("Exiting due to invalid authorization configuration.")
+    #     return
+    # --- END Check --- # - REMOVED
 
     # 1. Load API Key
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -113,12 +116,12 @@ async def main():
     # authorized_users = {}
     # ... (removed loading and parsing logic) ...
     # Use the hardcoded dictionary directly
-    authorized_users = AUTHORIZED_USERS
+    authorized_users = AUTHORIZED_USERS # Still pass this to handler for prompt additions
     if not authorized_users:
-        print("WARNING: AUTHORIZED_USERS dictionary is empty. No users can log in.")
+        print("WARNING: AUTHORIZED_USERS dictionary is empty. No user-specific prompts can be applied.")
         # Decide if this should be a critical error and return
     else:
-        print(f"Using hardcoded authorized users configuration for {len(authorized_users)} user(s).")
+        print(f"Loaded user prompt configurations for {len(authorized_users)} user(s).")
 
     # 2. Load Base System Prompt from file
     try:
@@ -178,12 +181,11 @@ async def main():
 
             # 6. Initialize WebSocket Handler
             print("Initializing WebSocket Handler...")
-            # Pass the BASE prompt TEMPLATE and authorized users to the handler.
-            # The final formatting with persona happens inside the handler.
+            # Pass the BASE prompt TEMPLATE and authorized users (for prompt additions) to the handler.
             handler = WebSocketHandler(
                 orchestrator=orchestrator,
                 base_system_prompt_template=base_system_prompt_template,
-                authorized_users=authorized_users
+                authorized_users=authorized_users # Still needed for prompt additions
             )
             print("WebSocket Handler Initialized.")
 

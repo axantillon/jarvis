@@ -2,10 +2,15 @@
 # web_gateway.py
 # JARVIS was here!
 # --- FastAPI Gateway Server ---
-# Purpose: Serves the static web client files and proxies WebSocket messages
-#          to the main backend server (assumed running on localhost:8765).
+# Purpose: Serves the static web client files, authenticates users via WebSocket,
+#          and proxies messages to the main backend server.
 # Changes:
 # - Initial creation.
+# - Added authentication logic to the /ws endpoint.
+# - Gateway now expects first client message to be auth credentials.
+# - Gateway sends an identification message to the backend upon successful auth.
+# - Loads user hashes from environment variables (requires TONY_HASH, PETER_HASH, etc.).
+# - Requires bcrypt: pip install bcrypt
 
 import asyncio
 import websockets
@@ -15,7 +20,45 @@ from starlette.responses import FileResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 import logging
 import os
-import time # Import time for timeout calculation
+import time
+import json # Added for parsing auth messages
+
+# --- Password Hashing --- #
+# Requires: pip install bcrypt
+try:
+    import bcrypt
+    logger.info("bcrypt library loaded successfully.")
+except ImportError:
+    logger.error("CRITICAL ERROR: bcrypt library not found. Please install it: pip install bcrypt")
+    # Decide how to handle this - exit? Or let it fail later?
+    bcrypt = None # Set to None to cause errors later if not installed
+
+# Utility function to verify a password
+def verify_password(plain_password: str, hashed_password_str: str) -> bool:
+    if not bcrypt:
+        logger.error("Cannot verify password, bcrypt library is missing.")
+        return False
+    if not isinstance(plain_password, str) or not isinstance(hashed_password_str, str):
+         logger.warning("Invalid types received for password verification.")
+         return False
+    try:
+        hashed_password_bytes = hashed_password_str.encode('utf-8') # Assume hash is stored as string
+        # Decode if it's base64 encoded? Usually bcrypt hashes are stored directly as strings
+        # containing the salt and hash. Let's assume direct UTF-8 encoding works.
+        # If hashes are stored base64 encoded, you'd need:
+        # import base64
+        # hashed_password_bytes = base64.b64decode(hashed_password_str)
+
+        password_bytes = plain_password.encode('utf-8')
+        return bcrypt.checkpw(password_bytes, hashed_password_bytes)
+    except ValueError as e:
+        logger.error(f"Error during bcrypt verification (likely malformed hash): {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error during password verification: {e}")
+        return False
+# --- End Password Hashing --- #
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +70,38 @@ BACKEND_WS_URI = "ws://localhost:8765"
 # Directory containing the web client files (HTML, CSS, JS)
 # Assumes web_client is in the same directory as this script
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "web_client")
+
+# --- Load User Authorization Configuration (Hashes only) ---
+# Load from environment variables like the main app does
+# Ensure TONY_HASH and PETER_HASH are set in the gateway's environment.
+AUTHORIZED_USER_HASHES = {
+    "axantillon@gmail.com": os.environ.get("TONY_HASH"),
+    "aguilarcarboni@gmail.com": os.environ.get("PETER_HASH"),
+    # Add other users here if needed, mapping email to ENV VAR NAME for hash
+}
+
+# --- Validate Loaded Hashes ---
+def validate_auth_hashes(auth_dict):
+    all_valid = True
+    logger.info("Validating loaded authentication hashes...")
+    for email, hashed_pw in auth_dict.items():
+        if not hashed_pw:
+            logger.error(f"CRITICAL ERROR: Missing hashed_password env var for user '{email}'. Authentication for this user will fail.")
+            all_valid = False
+        else:
+            # Basic check: bcrypt hashes usually start with '$2'
+            if not isinstance(hashed_pw, str) or not hashed_pw.startswith('$2'):
+                 logger.warning(f"Potential issue: Hash for user '{email}' does not look like a standard bcrypt hash.")
+            logger.info(f"Hash found for user '{email}'.") # Don't log the hash itself!
+    if all_valid:
+        logger.info("All configured user hashes seem to be present.")
+    else:
+        logger.error("One or more user hashes are missing from environment variables.")
+    return all_valid
+
+AUTH_HASHES_VALID = validate_auth_hashes(AUTHORIZED_USER_HASHES)
+# Note: We proceed even if not all are valid, but log errors.
+# --- End User Authorization Configuration & Validation ---
 
 # --- FastAPI Application ---
 app = fastapi.FastAPI()
@@ -82,100 +157,125 @@ async def forward_to_client(client_ws: WebSocket, backend_ws):
 
 @app.websocket("/ws")
 async def websocket_proxy_endpoint(client_ws: WebSocket):
-    """Handles client WebSocket connections and proxies to the backend."""
+    """Handles client WebSocket connections, authenticates, and proxies to the backend."""
     await client_ws.accept()
-    logger.info(f"Client connected: {client_ws.client}")
+    logger.info(f"Client connected: {client_ws.client}. Waiting for authentication...")
     backend_ws = None
-    connect_attempts = 0
-    max_attempts = 10 # Try up to 10 times
-    initial_delay = 1.0 # Start with 1 second
-    max_delay = 10.0 # Don't wait more than 10 seconds between retries
-    timeout_seconds = 60 # Total time allowed for connection attempts
-    start_time = time.monotonic()
+    authenticated_email = None
 
     try:
-        # --- REMOVE OLD DELAY ---
-        # await asyncio.sleep(15) # Wait 15 seconds before trying to connect
-        # logger.info("Delay complete, attempting backend connection...")
-        # --- END REMOVE OLD DELAY ---
+        # 1. Receive Authentication Message
+        auth_data_raw = await client_ws.receive_text()
+        logger.info(f"Received auth message from client: {auth_data_raw}") # Be cautious logging raw data if sensitive
+        try:
+            auth_data = json.loads(auth_data_raw)
+            if not isinstance(auth_data, dict) or auth_data.get("type") != "auth":
+                raise ValueError("Invalid auth message format or type")
+            email = auth_data.get("email")
+            password = auth_data.get("password")
+            if not email or not password:
+                raise ValueError("Missing email or password in auth message")
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse auth message or invalid format: {e}")
+            await client_ws.send_text(json.dumps({"type": "auth_fail", "reason": f"Invalid auth message format: {e}"}))
+            await client_ws.close(code=1008, reason="Invalid auth message format")
+            return # Close connection
 
-        # --- ADD RETRY LOOP ---
-        while True:
-            current_time = time.monotonic()
-            if current_time - start_time > timeout_seconds:
-                 logger.error(f"Backend connection timed out after {timeout_seconds} seconds.")
-                 raise websockets.exceptions.WebSocketException("Backend connection timeout")
+        # 2. Verify Credentials
+        logger.info(f"Attempting authentication for user: {email}")
+        hashed_password = AUTHORIZED_USER_HASHES.get(email)
 
-            connect_attempts += 1
-            logger.info(f"Attempting to connect to backend: {BACKEND_WS_URI} (Attempt {connect_attempts}/{max_attempts})")
-            try:
-                backend_ws = await websockets.connect(BACKEND_WS_URI)
-                logger.info("Connected to backend successfully.")
-                break # Exit loop on successful connection
-            except (OSError, websockets.exceptions.WebSocketException) as e:
-                 # Specific check for Connection Refused or similar OS errors
-                 if isinstance(e, ConnectionRefusedError) or "connection refused" in str(e).lower():
-                     logger.warning(f"Backend connection attempt {connect_attempts} failed: Connection refused. Retrying...")
-                 # Handle other WebSocket connection exceptions (e.g., invalid handshake)
-                 elif isinstance(e, websockets.exceptions.WebSocketException):
-                      logger.warning(f"Backend connection attempt {connect_attempts} failed: {e}. Retrying...")
-                 # Handle other potential OS errors during connection
-                 elif isinstance(e, OSError):
-                      logger.warning(f"Backend connection attempt {connect_attempts} failed with OS Error: {e}. Retrying...")
-                 else:
-                      raise # Re-raise unexpected errors
+        if not hashed_password:
+            logger.warning(f"Authentication failed: User '{email}' not found or hash missing.")
+            await client_ws.send_text(json.dumps({"type": "auth_fail", "reason": "User not found or not configured."}))
+            await client_ws.close(code=1008, reason="Authentication failed")
+            return
 
-                 if connect_attempts >= max_attempts:
-                     logger.error(f"Failed to connect to backend after {max_attempts} attempts.")
-                     raise e # Re-raise the last caught exception
+        if verify_password(password, hashed_password):
+            logger.info(f"Authentication successful for user: {email}")
+            authenticated_email = email
+            await client_ws.send_text(json.dumps({"type": "auth_success"}))
+        else:
+            logger.warning(f"Authentication failed for user: {email} (Incorrect password)")
+            await client_ws.send_text(json.dumps({"type": "auth_fail", "reason": "Incorrect password"}))
+            await client_ws.close(code=1008, reason="Authentication failed")
+            return
 
-                 # Calculate next delay with exponential backoff
-                 delay = min(initial_delay * (2 ** (connect_attempts - 1)), max_delay)
-                 logger.info(f"Waiting {delay:.2f} seconds before next retry...")
-                 await asyncio.sleep(delay)
-        # --- END RETRY LOOP ---
+        # 3. Connect to Backend (Only after successful authentication)
+        if authenticated_email:
+            connect_attempts = 0
+            max_attempts = 10
+            initial_delay = 1.0
+            max_delay = 10.0
+            timeout_seconds = 60
+            start_time = time.monotonic()
 
-        # Establish connection to the backend server (Now happens inside the loop)
-        # logger.info(f"Connecting to backend: {BACKEND_WS_URI}")
-        # backend_ws = await websockets.connect(BACKEND_WS_URI)
-        # logger.info("Connected to backend.")
+            while True:
+                current_time = time.monotonic()
+                if current_time - start_time > timeout_seconds:
+                    logger.error(f"Backend connection timed out after {timeout_seconds} seconds for user {authenticated_email}.")
+                    raise websockets.exceptions.WebSocketException("Backend connection timeout")
 
-        # Run forwarding tasks concurrently
-        client_to_backend_task = asyncio.create_task(
-            forward_to_backend(client_ws, backend_ws)
-        )
-        backend_to_client_task = asyncio.create_task(
-            forward_to_client(client_ws, backend_ws)
-        )
+                connect_attempts += 1
+                logger.info(f"Attempting backend connection for {authenticated_email}: {BACKEND_WS_URI} (Attempt {connect_attempts}/{max_attempts})")
+                try:
+                    backend_ws = await websockets.connect(BACKEND_WS_URI)
+                    logger.info(f"Connected to backend successfully for user: {authenticated_email}.")
+                    break # Exit loop
+                except Exception as e: # Catch broader exceptions during connect retry
+                    logger.warning(f"Backend connection attempt {connect_attempts} failed for {authenticated_email}: {e}. Retrying...")
+                    if connect_attempts >= max_attempts:
+                        logger.error(f"Failed to connect to backend after {max_attempts} attempts for {authenticated_email}.")
+                        raise e # Re-raise last error
 
-        # Wait for either task to complete (which means one side disconnected)
-        done, pending = await asyncio.wait(
-            {client_to_backend_task, backend_to_client_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+                    delay = min(initial_delay * (2 ** (connect_attempts - 1)), max_delay)
+                    logger.info(f"Waiting {delay:.2f} seconds before next retry...")
+                    await asyncio.sleep(delay)
 
-        # Cancel pending tasks to ensure cleanup
-        for task in pending:
-            task.cancel()
-            try:
-                await task # Allow cancellation to propagate
-            except asyncio.CancelledError:
-                logger.info("Task cancelled successfully.")
+            # 4. Send Identification to Backend
+            identify_message = json.dumps({"type": "identify", "email": authenticated_email})
+            logger.info(f"Sending identification to backend: {identify_message}")
+            await backend_ws.send(identify_message)
 
-        logger.info("Forwarding tasks finished.")
+            # 5. Start Proxying Messages
+            logger.info(f"Starting message proxying for user: {authenticated_email}")
+            client_to_backend_task = asyncio.create_task(
+                forward_to_backend(client_ws, backend_ws) # Pass authenticated email if needed by forwarder? No, just log maybe.
+            )
+            backend_to_client_task = asyncio.create_task(
+                forward_to_client(client_ws, backend_ws)
+            )
 
+            done, pending = await asyncio.wait(
+                {client_to_backend_task, backend_to_client_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    logger.info(f"Proxy task cancelled for {authenticated_email}.")
+
+            logger.info(f"Forwarding tasks finished for {authenticated_email}.")
+
+    except WebSocketDisconnect:
+         logger.info(f"Client {client_ws.client} disconnected {'before authentication.' if not authenticated_email else f'(as {authenticated_email}).'}")
     except websockets.exceptions.WebSocketException as e:
-        logger.error(f"Could not connect to backend server at {BACKEND_WS_URI}: {e}")
-        await client_ws.close(code=1011, reason=f"Backend connection failed: {e}")
+        logger.error(f"WebSocket Error (Backend Connection Failed?): {e} for client {client_ws.client} {f'(user: {authenticated_email})' if authenticated_email else ''}")
+        # Ensure client connection is closed if backend fails
+        if client_ws.client_state != client_ws.client_state.DISCONNECTED:
+            await client_ws.close(code=1011, reason=f"Backend connection failed: {e}")
     except Exception as e:
-        logger.error(f"An unexpected error occurred in the proxy endpoint: {e}")
-        await client_ws.close(code=1011, reason="Internal server error")
+        logger.error(f"Unexpected error in proxy endpoint for {client_ws.client} {f'(user: {authenticated_email})' if authenticated_email else ''}: {e}", exc_info=True)
+        if client_ws.client_state != client_ws.client_state.DISCONNECTED:
+            await client_ws.close(code=1011, reason="Internal server error")
     finally:
-        # Ensure backend connection is closed if it was opened
         if backend_ws and backend_ws.open:
             await backend_ws.close()
-            logger.info("Backend connection closed in finally block.")
-        logger.info(f"Client disconnected: {client_ws.client}")
+            logger.info(f"Backend connection closed in finally block for {authenticated_email or 'unauthenticated client'}.")
+        logger.info(f"Client connection closed: {client_ws.client} {f'(user: {authenticated_email})' if authenticated_email else ''}")
 
 
 # --- Static File Serving ---
@@ -213,6 +313,10 @@ else:
 # --- Main Execution (for running with uvicorn) ---
 if __name__ == "__main__":
     import uvicorn
-    logger.info("Starting gateway server with Uvicorn...")
-    # Use reload=True for development, remove for production
-    uvicorn.run("web_gateway:app", host="0.0.0.0", port=8000, reload=True)
+    # Ensure bcrypt is available before starting
+    if not bcrypt:
+         logger.critical("bcrypt library is missing. Server cannot start.")
+    else:
+        logger.info("Starting gateway server with Uvicorn...")
+        # Use reload=True for development, remove for production
+        uvicorn.run("web_gateway:app", host="0.0.0.0", port=8000, reload=True)

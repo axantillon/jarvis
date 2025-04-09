@@ -1,6 +1,6 @@
 # src/handlers/websocket_handler.py
 # --- Layer: WebSocket Handler ---
-# Purpose: Manages WebSocket connections, handles initial user authentication,
+# Purpose: Manages WebSocket connections, handles initial user identification (trusting the gateway),
 #          routes messages to the orchestrator with user-specific context,
 #          and streams responses back to the client.
 # Changes:
@@ -9,6 +9,9 @@
 # - Passes user-specific system prompt to the orchestrator.
 # - Updated authentication to use email/password with bcrypt.
 # - Added logging for message receipt and response sending.
+# - REMOVED client authentication logic (email/password check).
+# - Now expects an 'identify' message from the gateway containing the authenticated user's email.
+# - Trusts the gateway to perform authentication.
 
 import asyncio
 import json
@@ -23,8 +26,8 @@ import websockets
 from websockets.server import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
-# Import bcrypt for password hashing
-import bcrypt
+# Import bcrypt for password hashing -- NO LONGER NEEDED HERE
+# import bcrypt
 
 # Import core components and types
 from src.core.orchestrator import ConversationOrchestrator
@@ -130,170 +133,149 @@ class WebSocketHandler:
         return payload
 
     async def handle_connection(self, websocket: WebSocketServerProtocol):
-        """Handles a single WebSocket connection lifecycle, including authentication."""
+        """Handles a single WebSocket connection lifecycle, expecting identification from gateway."""
         session_id = await self._register_connection(websocket)
-        authenticated = False
+        identified = False # Renamed variable for clarity
         user_session: Optional[AuthenticatedSession] = None
 
         try:
-            # --- Authentication Phase ---
-            print(f"Handler ({session_id}): Waiting for authentication message...")
+            # --- Identification Phase (Trusting Gateway) ---
+            print(f"Handler ({session_id}): Waiting for identification message from gateway...")
             try:
-                # Remove asyncio.wait_for, wait indefinitely for the first message
-                # auth_message_str = await asyncio.wait_for(websocket.recv(), timeout=10.0)
-                auth_message_str = await websocket.recv()
-                auth_message = json.loads(auth_message_str)
+                # Wait indefinitely for the identification message from the gateway
+                identify_message_str = await websocket.recv()
+                identify_message = json.loads(identify_message_str)
+                print(f"Handler ({session_id}): Received message from gateway: {identify_message_str}") # Log the raw message
 
-                if auth_message.get("type") == "auth" and "email" in auth_message and "password" in auth_message:
-                    email = auth_message["email"]
+                if identify_message.get("type") == "identify" and "email" in identify_message:
+                    email = identify_message["email"]
+                    print(f"Handler ({session_id}): Identification received for email: {email}")
 
-                    # Check if email exists in our config
+                    # Find user data based on the trusted email
                     if email in self.authorized_users:
                         user_data = self.authorized_users[email]
-                        stored_hashed_pw_str = user_data.get("hashed_password")
-                        persona_definition = user_data.get("prompt_addition", "") # Default to empty if missing
+                        persona_definition = user_data.get("prompt_addition", "")
 
-                        # Verify password using bcrypt
-                        password_provided = auth_message["password"]
-                        if not stored_hashed_pw_str or not isinstance(stored_hashed_pw_str, str):
-                            print(f"Handler ({session_id}): Auth failed - Missing/invalid stored hash for {email}.")
-                            authenticated = False # Treat missing hash as failure
-                        else:
-                            stored_hashed_pw_bytes = stored_hashed_pw_str.encode('utf-8')
-                            password_provided_bytes = password_provided.encode('utf-8')
-                            # Perform the check
-                            try:
-                                if bcrypt.checkpw(password_provided_bytes, stored_hashed_pw_bytes):
-                                    # Password matches!
-                                    authenticated = True
-                                    print(f"Handler ({session_id}): User '{email}' authenticated successfully (password verified).")
-                                else:
-                                     # Password does not match
-                                     authenticated = False
-                                     print(f"Handler ({session_id}): Authentication failed - Incorrect password for {email}.")
-                            except ValueError:
-                                print(f"Handler ({session_id}): Auth failed - Invalid hash format stored for {email}.")
-                                authenticated = False
+                        # Format the final prompt using the template and persona
+                        try:
+                            final_system_prompt = self.base_system_prompt_template.format(
+                                persona_definition=persona_definition
+                            )
+                            print(f"Handler ({session_id}): System prompt formatted for {email}.")
+                        except KeyError as e:
+                            print(f"Handler ({session_id}): WARNING - Placeholder {e} not found in template, using raw template for {email}.")
+                            final_system_prompt = self.base_system_prompt_template # Fallback
 
-                        # If authenticated, store session data
-                        if authenticated:
-                            # Format the final prompt using the template and persona
-                            try:
-                                final_system_prompt = self.base_system_prompt_template.format(
-                                    persona_definition=persona_definition
-                                )
-                            except KeyError as e:
-                                print(f"Handler ({session_id}): WARNING - Placeholder {e} not found in template, using raw template.")
-                                final_system_prompt = self.base_system_prompt_template # Fallback
-
-                            user_session = AuthenticatedSession(email=email, system_prompt=final_system_prompt)
-                            self._authenticated_sessions[session_id] = user_session
-                            await websocket.send(json.dumps({
-                                "type": "auth_success",
-                                "payload": {"sessionId": session_id}
-                            }))
+                        user_session = AuthenticatedSession(email=email, system_prompt=final_system_prompt)
+                        self._authenticated_sessions[session_id] = user_session
+                        identified = True # Mark as identified
+                        # No need to send auth_success back, gateway handles client communication
+                        print(f"Handler ({session_id}): Session established for user {email}.")
 
                     else:
-                        # Email not found OR password incorrect
-                        if not authenticated: # Only print password failure message if it already failed
-                             # Send generic failure message (don't reveal *why* it failed to client)
-                             print(f"Handler ({session_id}): Authentication failed for email {email} (reason logged above).")
-                             await websocket.send(json.dumps({
-                                  "type": "auth_failed",
-                                  "payload": {"message": "Authentication failed."}
-                             }))
+                        # This case should ideally not happen if gateway config matches backend
+                        print(f"CRITICAL ERROR ({session_id}): Received identification for unknown email '{email}' from gateway.")
+                        identified = False
 
                 else:
-                    # Email not found in config
-                    print(f"Handler ({session_id}): Authentication failed - Unauthorized email: {email}")
-                    await websocket.send(json.dumps({
-                        "type": "auth_failed",
-                        "payload": {"message": "Authentication failed."}
-                    }))
+                    print(f"Handler ({session_id}): Invalid or non-identify message received from gateway: {identify_message_str}")
+                    identified = False
+
+                # If identification failed, close the connection
+                if not identified:
+                    print(f"Handler ({session_id}): Closing connection due to failed identification.")
+                    await websocket.close(code=1008, reason="Identification Failed")
+                    return # Exit the handler
+
             except json.JSONDecodeError:
-                 print(f"Handler ({session_id}): Authentication failed - Invalid JSON.")
-                 await websocket.send(json.dumps({"type": "auth_failed", "payload": {"message": "Invalid JSON during authentication."}}))
-            except Exception as e:
-                 print(f"Handler ({session_id}): Authentication error: {e}")
-                 await websocket.send(json.dumps({"type": "auth_failed", "payload": {"message": f"Server error during authentication: {e}"}}))
-                 # Don't proceed if auth fails unexpectedly
-                 authenticated = False
+                print(f"Handler ({session_id}): Invalid JSON received from gateway during identification.")
+                await websocket.close(code=1008, reason="Invalid Identify Message Format")
+                return
+            except (ConnectionClosedOK, ConnectionClosedError) as e:
+                # Handle client disconnecting before sending auth/identify
+                print(f"Handler ({session_id}): Connection closed during identification phase: {e}")
+                return # Exit handler, connection already unregistered by finally block wrapper
+            except Exception as e: # Catch unexpected errors during auth/identify
+                print(f"Handler ({session_id}): Error during identification phase: {e}")
+                traceback.print_exc()
+                await websocket.close(code=1011, reason="Internal Server Error during Identification")
+                return
 
-            # If authentication failed for any reason, close the connection
-            if not authenticated:
-                await websocket.close(code=1008, reason="Authentication Failed") # 1008 = Policy Violation
-                # Unregister will be called in the finally block
-                return # Stop processing for this connection
-
-            # --- Main message loop (only if authenticated) ---
-            logger.info(f"Handler ({session_id}, {user_session.email}): Authentication successful, entering message loop.")
-            async for message_str in websocket:
-                logger.info(f"Handler ({session_id}, {user_session.email}): Received message: '{message_str[:100]}...'") # Log full message received
-                # Ensure user_session is available (should always be true if authenticated)
-                if not user_session:
-                     logger.critical(f"Handler ({session_id}): CRITICAL - Missing user session data despite authentication. Closing.")
-                     await websocket.close(code=1011, reason="Internal Server Error") # 1011 = Internal Error
-                     break
-
+            # --- Message Handling Loop (Only runs if authenticated/identified) ---
+            print(f"Handler ({session_id}): Identification successful. Entering message loop for {user_session.email}.")
+            while True:
                 try:
-                    message = json.loads(message_str)
-                    msg_type = message.get("type")
-                    payload = message.get("payload")
+                    message_str = await websocket.recv()
+                    logger.info(f"Handler ({session_id}, {user_session.email}): Received message: '{message_str[:100]}...'") # Log full message received
+                    # Ensure user_session is available (should always be true if authenticated)
+                    if not user_session:
+                         logger.critical(f"Handler ({session_id}): CRITICAL - Missing user session data despite authentication. Closing.")
+                         await websocket.close(code=1011, reason="Internal Server Error") # 1011 = Internal Error
+                         break
 
-                    if msg_type == "message" and payload and "text" in payload:
-                        user_text = payload["text"]
-                        logger.info(f"Handler ({session_id}, {user_session.email}): Processing user text: '{user_text[:100]}...'")
-
-                        # TODO: Allow passing LLMConfig from client if needed
-                        llm_config = LLMConfig({}) # Empty config for now
-
-                        # Track the full response text being sent
-                        full_response_text = ""
-                        # Call the orchestrator and stream results back
-                        # Pass the user-specific system prompt from the authenticated session
-                        async for part in self.orchestrator.handle_input(
-                            session_id=session_id,
-                            text=user_text,
-                            llm_config=llm_config,
-                            system_prompt=user_session.system_prompt # Pass user-specific prompt
-                        ):
-                            # Format and send the part to the client
-                            response_payload = self._format_response_part(part)
-                            if response_payload:
-                                # Log the chunk being sent
-                                # logger.debug(f"Handler ({session_id}, {user_session.email}): Sending part: {response_payload}")
-                                # Accumulate text chunks for final log
-                                if response_payload.get("type") == "text":
-                                    full_response_text += response_payload.get("payload", {}).get("content", "")
-                                
-                                await websocket.send(json.dumps(response_payload))
-                        
-                        # Log the complete response text after the stream ends
-                        logger.info(f"Handler ({session_id}, {user_session.email}): Finished streaming response. Full text: '{full_response_text[:200]}...'")
-
-                    # Handle other message types if needed (e.g., config changes)
-                    else:
-                        logger.warning(f"Handler ({session_id}, {user_session.email}): Received unknown/unsupported message type: {msg_type}")
-                
-                except json.JSONDecodeError:
-                    logger.error(f"Handler ({session_id}, {user_session.email}): Received invalid JSON: {message_str[:100]}...")
-                    # Optionally send an error back to the client
-                    # await websocket.send(json.dumps({"type": "error", "payload": {"message": "Invalid JSON received"}}))
-                except Exception as e:
-                    # Catch potential errors during message processing or streaming
-                    error_trace = traceback.format_exc()
-                    logger.error(f"Handler ({session_id}, {user_session.email}): Error handling message: {e}\n{error_trace}")
-                    # Send a generic error to the client
                     try:
-                        await websocket.send(json.dumps({
-                            "type": "error",
-                            "payload": {"message": f"An internal server error occurred: {e}", "details": error_trace}
-                        }))
-                    except (ConnectionClosedOK, ConnectionClosedError):
-                        # Connection might already be closed
-                        pass
+                        message = json.loads(message_str)
+                        msg_type = message.get("type")
+                        payload = message.get("payload")
+
+                        if msg_type == "message" and payload and "text" in payload:
+                            user_text = payload["text"]
+                            logger.info(f"Handler ({session_id}, {user_session.email}): Processing user text: '{user_text[:100]}...'")
+
+                            # TODO: Allow passing LLMConfig from client if needed
+                            llm_config = LLMConfig({}) # Empty config for now
+
+                            # Track the full response text being sent
+                            full_response_text = ""
+                            # Call the orchestrator and stream results back
+                            # Pass the user-specific system prompt from the authenticated session
+                            async for part in self.orchestrator.handle_input(
+                                session_id=session_id,
+                                text=user_text,
+                                llm_config=llm_config,
+                                system_prompt=user_session.system_prompt # Pass user-specific prompt
+                            ):
+                                # Format and send the part to the client
+                                response_payload = self._format_response_part(part)
+                                if response_payload:
+                                    # Log the chunk being sent
+                                    # logger.debug(f"Handler ({session_id}, {user_session.email}): Sending part: {response_payload}")
+                                    # Accumulate text chunks for final log
+                                    if response_payload.get("type") == "text":
+                                        full_response_text += response_payload.get("payload", {}).get("content", "")
+                                    
+                                    await websocket.send(json.dumps(response_payload))
+                            
+                            # Log the complete response text after the stream ends
+                            logger.info(f"Handler ({session_id}, {user_session.email}): Finished streaming response. Full text: '{full_response_text[:200]}...'")
+
+                        # Handle other message types if needed (e.g., config changes)
+                        else:
+                            logger.warning(f"Handler ({session_id}, {user_session.email}): Received unknown/unsupported message type: {msg_type}")
+                    
+                    except json.JSONDecodeError:
+                        logger.error(f"Handler ({session_id}, {user_session.email}): Received invalid JSON: {message_str[:100]}...")
+                        # Optionally send an error back to the client
+                        # await websocket.send(json.dumps({"type": "error", "payload": {"message": "Invalid JSON received"}}))
+                    except Exception as e:
+                        # Catch potential errors during message processing or streaming
+                        error_trace = traceback.format_exc()
+                        logger.error(f"Handler ({session_id}, {user_session.email}): Error handling message: {e}\n{error_trace}")
+                        # Send a generic error to the client
+                        try:
+                            await websocket.send(json.dumps({
+                                "type": "error",
+                                "payload": {"message": f"An internal server error occurred: {e}", "details": error_trace}
+                            }))
+                        except (ConnectionClosedOK, ConnectionClosedError):
+                            # Connection might already be closed
+                            pass
                     # Consider whether to break the loop or continue after an error
                     # break
+
+                except (ConnectionClosedOK, ConnectionClosedError) as e:
+                    print(f"Handler ({session_id}): Connection closed by client ({user_session.email}): {e}")
+                    break # Exit loop on disconnect
 
         except (ConnectionClosedOK, ConnectionClosedError) as e:
             logger.info(f"Handler ({session_id}): Connection closed ({type(e).__name__}).")
@@ -304,6 +286,7 @@ class WebSocketHandler:
         finally:
             # Ensure connection is always unregistered
             await self._unregister_connection(websocket)
+            print(f"Handler ({session_id}): Connection cleanup complete.")
 
     async def start_server(self, host: str, port: int):
         """Starts the WebSocket server."""

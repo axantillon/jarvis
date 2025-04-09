@@ -1,6 +1,7 @@
 # src/cli_client.py
 # --- Simple Async WebSocket CLI Client ---
-# Purpose: Connects to the Laserfocus Host WebSocket server and allows interaction.
+# Purpose: Connects to the Laserfocus Host WebSocket server (direct backend connection),
+#          prompts for email, sends an identification message, and allows interaction.
 # Changes:
 # - Fixed color rendering and proper handling of end signals
 # - Improved prompt and output formatting to ensure clear separation
@@ -8,6 +9,8 @@
 # - Fixed initial input prompt alignment
 # - Made status messages more subtle for fluidity
 # - Added processing indicator (with delay)
+# - MODIFIED: Now prompts for email and sends an 'identify' message upon connection.
+# - Fixed initial '>>>' prompt timing.
 
 import asyncio
 import websockets
@@ -73,7 +76,6 @@ async def receive_websocket_messages(websocket):
     global is_processing, processing_status, indicator_timer_task
     try:
         currently_speaking = False
-        initial_prompt_printed = False
 
         while True:
             message_str = await websocket.recv()
@@ -123,19 +125,8 @@ async def receive_websocket_messages(websocket):
 
             elif msg_type == "end":
                 if currently_speaking: console.print(); currently_speaking = False
-                console.print()
-                console.print(Text(">>> ", style="bold green"), end="")
-
-            elif msg_type == "connection":
-                console.print()
-                connection_text = Text()
-                connection_text.append("Connected. Session ID: ", style="bold green")
-                connection_text.append(payload.get('sessionId'), style="green")
-                console.print(connection_text)
-                if not initial_prompt_printed:
-                    console.print()
-                    console.print(Text(">>> ", style="bold green"), end="")
-                    initial_prompt_printed = True
+                console.print() # Print newline for spacing
+                console.print(Text(">>> ", style="bold green"), end="") # Print prompt after JARVIS response
 
     # --- Exception Handling (ensure timer/status stopped) ---
     except websockets.exceptions.ConnectionClosed:
@@ -158,9 +149,28 @@ async def main():
     global is_processing, processing_status, indicator_timer_task
     console.print(f"Connecting to {SERVER_URI}...", style="bold")
 
+    # Get user email for identification
+    try:
+        user_email = console.input("[bold yellow]Enter your email for identification: ")
+        if not user_email:
+            console.print("Email cannot be empty. Exiting.", style="bold red")
+            return
+    except EOFError:
+        console.print("\nInput cancelled. Exiting.", style="bold yellow")
+        return
+
     try:
         async with websockets.connect(SERVER_URI) as websocket:
-            console.print("Connected!", style="bold green")
+            console.print("Connected! Identifying...", style="bold green")
+
+            # Send the identify message
+            identify_message = {"type": "identify", "email": user_email}
+            await websocket.send(json.dumps(identify_message))
+            console.print(f"Sent identification for {user_email}.", style="green")
+
+            # Print the initial prompt HERE, after identification is sent
+            console.print() # Add a newline for spacing
+            console.print(Text(">>> ", style="bold green"), end="")
 
             input_thread = threading.Thread(target=input_thread_function)
             input_thread.daemon = True

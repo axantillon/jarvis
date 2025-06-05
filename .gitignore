@@ -80,3 +80,6 @@ htmlcov/
 
 # Removed problematic ignore for .git directory
 # .git/
+
+/app
+/engine
